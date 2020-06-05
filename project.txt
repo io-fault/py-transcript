@@ -1,0 +1,17 @@
+! CONTEXT:
+	/protocol/
+		&<http://if.fault.io/project/information>
+
+/identifier/
+	&<http://fault.io/python/transcripts>
+/icon/
+	- (emoji)`🎛`
+/name/
+	`transcripts`
+/abstract/
+	Tools for processing status frames for logging and monitoring.
+
+/authority/
+	`fault.io`
+/contact/
+	&<http://fault.io/critical>
