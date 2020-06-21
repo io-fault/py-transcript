@@ -337,8 +337,10 @@ class Control(object):
 		# Write any buffered terminal changes to the device.
 		"""
 		l = len(self._buffer)
-		buf = self.screen.exit_scrolling_region()
-		buf += b''.join(itertools.islice(self._buffer, 0, l))
+		buf = bytearray()
+		buf += self.screen.exit_scrolling_region()
+		for x in itertools.islice(self._buffer, 0, l):
+			buf += x
 		buf += self.screen.enter_scrolling_region()
 
 		try:

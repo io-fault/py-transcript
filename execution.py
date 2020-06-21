@@ -1,6 +1,7 @@
 """
 # System process status display using transaction frames.
 """
+import os
 import collections
 import typing
 
@@ -139,7 +140,6 @@ def singledispatch(error, output, controls, trap, invocations):
 	"""
 	from ..system import query
 	from ..time.sysclock import now, elapsed
-	from .io import spawnframes
 	from ..status import frames
 
 	pack = frames.stdio()[1]
@@ -238,16 +238,19 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 	# Commands are executed simultaneously so long as a monitor is available to display
 	# their status.
 	"""
+	import signal
+	from . import io
 	from ..system import query
+	from ..system import execution
 	from ..time.sysclock import now, elapsed
-	from .io import spawnframes
 	from ..status import frames
 
-	pack = frames.stdio()[1]
+	unpack, pack = frames.stdio()
 	hostname = query.hostname()
 	total_messages = 0
 	message_count = 0
 	nmonitors = len(monitors)
+	ioa = io.FrameArray(unpack)
 
 	stctl = control
 	available = collections.deque(range(nmonitors))
@@ -255,6 +258,7 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 	processing = True
 
 	try:
+		ioa.__enter__()
 		while processing:
 			if available:
 				# Open processing lanes take from queue.
@@ -262,7 +266,13 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 					lid = available.popleft()
 					category, dimensions, xqual, xcontext, ki = plan(ident)
 
+					rfd, wfd = os.pipe()
+					pid = ki.spawn(fdmap=[(0,0), (wfd,1), (2,2)])
+					ioa.connect(lid, rfd)
+					os.close(wfd)
+
 					status = statusd[lid] = {
+						'pid': pid,
 						'executing': 0,
 						'failed': 0,
 						'finished': 0,
@@ -273,7 +283,6 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 						'stime': 0.0,
 						'utime': 0.0,
 						'source': ident,
-						'frames': iter(spawnframes(ki)),
 						'counts': collections.Counter(),
 						'messages': 0,
 						'type': category,
@@ -285,28 +294,29 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 					monitor.update(status)
 					stctl.clear(monitor)
 					stctl.reflect(monitor)
-				else:
-					if queue.terminal() and not statusd:
-						# Queue has nothing and statusd is empty? EOF.
-						processing = False
+
+				if queue.terminal() and not statusd:
+					# Queue has nothing and statusd is empty? EOF.
+					processing = False
+					stctl.flush()
+					continue
+
 				stctl.flush()
 
 			# Cycle through sources, flush when complete.
-			for lid in range(nmonitors):
-				if lid not in statusd:
-					continue
-
+			for lid, sframes in ioa:
 				status = statusd[lid]
+				xacts = status['transactions']
+				counts = status['counts']
 				srcid = status['source']
 				monitor = monitors[lid]
 
-				try:
-					sframes = next(status['frames'])
-				except StopIteration:
+				if sframes is None:
 					# Closed.
-					queue.finish(statusd[lid]['source'])
+					queue.finish(status['source'])
 					del statusd[lid]
 					available.append(lid)
+					exit_status = execution.reap(status['pid'], options=0)
 
 					# Send final snapshot to output. (stdout)
 					status['finished'] = str(status['finished']).rjust(5, ' ')
@@ -321,13 +331,10 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 
 				nframes = len(sframes)
 				message_count += nframes
-				xacts = status['transactions']
-				counts = status['counts']
 
 				for channel, msg in sframes:
 					evtype = msg.msg_event.symbol
 					counts[evtype] += 1
-
 					xacts[channel].append(msg)
 
 					if evtype == 'transaction-stopped':
@@ -361,8 +368,17 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 
 				monitor.update(status)
 				stctl.reflect(monitor)
-				stctl.flush()
+
+			stctl.flush()
 		else:
 			pass
 	finally:
+		ioa.__exit__(None, None, None) # Exception has the same effect.
 		error.flush()
+		for lid in statusd:
+			try:
+				os.killpg(statusd[lid]['pid'], signal.SIGKILL)
+			except (KeyError, ProcessLookupError):
+				pass
+			else:
+				exit_status = execution.reap(status['pid'], options=0)
