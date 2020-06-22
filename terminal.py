@@ -268,9 +268,9 @@ class Control(object):
 		# Create a &matrix.Context instance relative to the &Control' status context.
 		"""
 		rctx = self.context
-		if width is not None:
+		if width is None:
 			width = rctx.width
-		if height is not None:
+		if height is None:
 			height = rctx.height
 
 		top, left = point
