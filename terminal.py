@@ -90,12 +90,12 @@ class Theme(object):
 			(precision+'-timeunit', precision),
 		]
 
-	def define(self, name, *args, **kw):
+	def define(self, name, *args, using='plain', **kw):
 		"""
 		# Define a set of render parameters within the theme.
 		# Parameters aside from &name are passed to &matrix.Context.RenderParameters.apply.
 		"""
-		self.stylesets[name] = self.stylesets['plain'].apply(*args, **kw)
+		self.stylesets[name] = self.stylesets[using].apply(*args, **kw)
 
 	def implement(self, type, render):
 		"""
