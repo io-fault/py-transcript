@@ -5,6 +5,7 @@ import os
 import collections
 import typing
 
+from ..context import tools
 from ..terminal import palette
 from . import terminal
 
@@ -13,6 +14,42 @@ def title(category, dimensions):
 	# Form a title string from an execution plan's category and dimensions.
 	"""
 	return str(category) + '[' + ']['.join(dimensions) + ']'
+
+_metric_units = [
+	('kilo', 'k', 3),
+	('mega', 'M', 6),
+	('giga', 'G', 9),
+	('tera', 'T', 12),
+	('peta', 'P', 15),
+	('exa', 'E', 18),
+	('zetta', 'Z', 21),
+	('yotta', 'Y', 24),
+]
+
+def _precision(count):
+	index = 0
+	for pd in _metric_units:
+		count //= (10**3)
+		if count < 1000:
+			return pd
+	return pd
+
+def _strings(value, formatting="{:.1f}".format):
+	suffix, power = _precision(value)[1:]
+	r = value / (10**power)
+	return (formatting(r), suffix)
+
+def r_count(field, value):
+	if isinstance(value, str) or value < 100000:
+		n = str(value)
+		unit = ''
+	else:
+		n, unit = _strings(value)
+
+	return [
+		(field, n),
+		('unit-label', unit)
+	]
 
 def r_usage(value, color='blue'):
 	if not value:
@@ -40,23 +77,24 @@ _order = [
 	('title', -24),
 	('duration', 6),
 	('usage', 32),
-	('executing', 6),
-	('failed', 6),
-	('finished', 6),
+	('executing', 8),
+	('failed', 8),
+	('finished', 8),
 ]
 
 _formats = [
 	('i', "", 'white', None), # Title
 	('t', "duration", 'white', terminal.Theme.r_duration),
 	('u', "usage", 'violet', r_usage),
-	('x', "executing", 'yellow', None),
-	('f', "failed", 'red', None),
-	('d', "finished", 'green', None),
+	('x', "executing", 'yellow', tools.partial(r_count, 'executing')),
+	('f', "failed", 'red', tools.partial(r_count, 'failed')),
+	('d', "finished", 'green', tools.partial(r_count, 'finished')),
 ]
 
 def configure(order, formats):
 	l = terminal.Layout(order)
 	t = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
+	t.define('unit-label', textcolor=palette.colors['gray'])
 	t.define('usage-context-p', textcolor=palette.colors['gray'])
 	t.define('usage-context-k', textcolor=palette.colors['gray'])
 	t.define('usage-context-receive', textcolor=palette.colors['gray'])
