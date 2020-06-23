@@ -20,12 +20,12 @@ def r_usage(value, color='blue'):
 
 	for t, count in value[:-1]:
 		yield ('usage', "{:.1f}".format(count))
-		yield ('usage-context', t)
+		yield ('usage-context-'+t, t)
 		yield ('plain', '/')
 
 	t, count = value[-1]
 	yield ('usage', "{:.1f}".format(count))
-	yield ('usage-context', t)
+	yield ('usage-context-'+t, t)
 
 def r_label(value):
 	start, keycode, end = value
@@ -35,45 +35,58 @@ def r_label(value):
 		('Label', end),
 	]
 
-_ATheme = {
-	'finished': ('d', "finished", 'green', None),
-	'failed': ('f', "failed", 'red', None),
-	'executing': ('x', "executing", 'violet', None),
-	'usage': ('u', "usage", 'blue', r_usage),
-	'duration': ('t', "duration", 'gray', terminal.Theme.r_duration),
-	'title': ('i', "", 'white', None),
-}
-
 # Display order.
-_fields = [
+_order = [
 	('title', -24),
 	('duration', 6),
-	('usage', 16),
+	('usage', 32),
 	('executing', 6),
 	('failed', 6),
 	('finished', 6),
 ]
 
-ATheme = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
-ALayout = terminal.Layout(_fields)
-ATheme.define('usage-context', textcolor=palette.colors['cyan'])
+_formats = [
+	('i', "", 'white', None), # Title
+	('t', "duration", 'white', terminal.Theme.r_duration),
+	('u', "usage", 'violet', r_usage),
+	('x', "executing", 'yellow', None),
+	('f', "failed", 'red', None),
+	('d', "finished", 'green', None),
+]
 
-for k, (keycode, label, color, fn) in _ATheme.items():
-	ATheme.implement(k, fn)
-	ATheme.define(k, textcolor=palette.colors[color])
-	ALayout.label(k, label or None)
+def configure(order, formats):
+	l = terminal.Layout(order)
+	t = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
+	t.define('usage-context-p', textcolor=palette.colors['gray'])
+	t.define('usage-context-k', textcolor=palette.colors['gray'])
+	t.define('usage-context-receive', textcolor=palette.colors['gray'])
+	t.define('usage-context-transmit', textcolor=palette.colors['gray'])
+	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
+	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
+	t.define('data-rate', textcolor=palette.colors['gray'])
 
-def aggregate(lanes=1, layout=ALayout, theme=ATheme):
+	for (k, width), (keycode, label, color, fn) in zip(order, formats):
+		t.implement(k, fn)
+		t.define(k, textcolor=palette.colors[color])
+		l.label(k, label or None)
+
+	return t, l
+
+ATheme, ALayout = configure(_order, _formats)
+
+def aggregate(lanes=1, width=80, layout=ALayout, theme=ATheme):
 	"""
 	# Construct a monitor controller for execution aggregation.
 	"""
 	stctl = terminal.setup(lanes+1)
 
 	lanes_seq = [
-		terminal.Monitor(theme, layout, stctl.allocate((0,i), width=80))
+		terminal.Monitor(theme, layout, stctl.allocate((0, i), width=width))
 		for i in range(lanes)
 	]
-	return stctl, lanes_seq
+	totals = terminal.Monitor(theme, layout, stctl.allocate((0, lanes), width=width))
+
+	return stctl, lanes_seq, totals
 
 def transaction(synopsis, duration):
 	"""
@@ -147,7 +160,7 @@ def singledispatch(error, output, controls, trap, invocations):
 	total_messages = 0
 	message_count = 0
 
-	stctl, monitors = controls
+	stctl, monitors, tmonitor = controls
 	monitor, = monitors
 
 	try:
@@ -230,7 +243,7 @@ def singledispatch(error, output, controls, trap, invocations):
 		stctl.flush()
 		error.flush()
 
-def dispatch(error, output, control, monitors, queue, trap, plan, range=range, next=next):
+def dispatch(error, output, control, monitors, summary, queue, trap, plan, range=range, next=next):
 	"""
 	# Execute a sequence of system commands while displaying their status
 	# according to the transaction messages they emit to standard out.
@@ -256,6 +269,20 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 	available = collections.deque(range(nmonitors))
 	statusd = {}
 	processing = True
+	totals = {
+		'pid': 0,
+		'executing': 0,
+		'failed': 0,
+		'finished': 0,
+		'usage': [('p', 0.0), ('k', 0.0)],
+		'duration': 0.0,
+		'start-time': elapsed(),
+		'stime': 0.0,
+		'utime': 0.0,
+		'type': 'aggregate',
+		'title': "SUMMARY[*]",
+	}
+	summary.update(totals)
 
 	try:
 		ioa.__enter__()
@@ -345,6 +372,9 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 						status['utime'] += stop_data.get_parameter('user')
 						status['stime'] += stop_data.get_parameter('system')
 
+						totals['utime'] += stop_data.get_parameter('user')
+						totals['stime'] += stop_data.get_parameter('system')
+
 						start_time = start_data.get_parameter('time-offset')
 						stop_time = stop_data.get_parameter('time-offset')
 
@@ -353,7 +383,13 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 						exit_code = stop_data.get_parameter('status')
 						if exit_code != 0:
 							status['failed'] += 1
+							totals['failed'] += 1
 							trap(output, xcontext, channel, stop_data, start_data, messages)
+						else:
+							totals['finished'] += 1
+							totals['executing'] -= 1
+					elif evtype == 'transaction-started':
+						totals['executing'] += 1
 
 				status['finished'] = counts['transaction-stopped'] - status['failed']
 				status['executing'] = str(counts['transaction-started'] - status['finished'])
@@ -369,6 +405,14 @@ def dispatch(error, output, control, monitors, queue, trap, plan, range=range, n
 				monitor.update(status)
 				stctl.reflect(monitor)
 
+			utime = totals['utime']
+			stime = totals['stime']
+			duration = (elapsed().decrease(totals['start-time']).select('millisecond') or 1)
+			duration /= 1000 # convert to float seconds
+			totals['usage'] = [('p', 100*utime/duration), ('k', 100*stime/duration)]
+			totals['duration'] = duration
+			summary.update(totals)
+			stctl.reflect(summary)
 			stctl.flush()
 		else:
 			pass
