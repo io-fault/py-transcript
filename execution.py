@@ -74,7 +74,7 @@ def r_label(value):
 
 # Display order.
 _order = [
-	('title', -24),
+	('title', -32),
 	('duration', 6),
 	('usage', 32),
 	('executing', 8),
@@ -281,6 +281,50 @@ def singledispatch(error, output, controls, trap, invocations):
 		stctl.flush()
 		error.flush()
 
+def _launch(status, stderr=2, stdin=0):
+	status.update({
+		'pid': 0,
+		'failed': 0,
+		'finished': 0,
+		'executing': 0,
+		'duration': 0.0,
+		'stime': 0.0,
+		'utime': 0.0,
+		'usage': [('p', 0.0), ('k', 0.0)],
+		'counts': collections.Counter(),
+		'messages': 0,
+		'transactions': collections.defaultdict(list),
+	})
+
+	try:
+		category, dimensions, xqual, xcontext, ki = next(status['process-queue'])
+		status['type'] = category
+		status['title'] = title(category, dimensions)
+		status['channel'] = xqual
+	except StopIteration:
+		return None
+
+	rfd, wfd = os.pipe()
+	try:
+		status['pid'] = ki.spawn(fdmap=[(0,0), (wfd,1), (2,2)])
+		os.close(wfd)
+	except:
+		os.close(rfd)
+		os.close(wfd)
+		raise
+
+	return rfd
+
+def _transmit(pack, output, stctl, monitor, status):
+	for k in ['finished', 'executing', 'failed']:
+		status[k] = str(status[k]).rjust(5, ' ')
+
+	monitor.update(status)
+	cells, mss = monitor.snapshot()
+	synop = status['type'] + ': ' + mss + stctl.context.reset_text().decode('utf-8')
+
+	output.write(pack((status['channel'], transaction(synop, status['duration']))))
+
 def dispatch(error, output, control, monitors, summary, queue, trap, plan, range=range, next=next):
 	"""
 	# Execute a sequence of system commands while displaying their status
@@ -329,44 +373,38 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 				# Open processing lanes take from queue.
 				for ident in queue.take(len(available)):
 					lid = available.popleft()
-					category, dimensions, xqual, xcontext, ki = plan(ident)
-
-					rfd, wfd = os.pipe()
-					pid = ki.spawn(fdmap=[(0,0), (wfd,1), (2,2)])
-					ioa.connect(lid, rfd)
-					os.close(wfd)
+					kii = iter(plan(ident))
 
 					status = statusd[lid] = {
-						'pid': pid,
-						'executing': 0,
-						'failed': 0,
-						'finished': 0,
-						'usage': [('p', 0.0), ('k', 0.0)],
-						'duration': 0.0,
-						'start-time': elapsed(),
-						'transactions': collections.defaultdict(list),
-						'stime': 0.0,
-						'utime': 0.0,
 						'source': ident,
-						'counts': collections.Counter(),
-						'messages': 0,
-						'type': category,
-						'title': title(category, dimensions),
-						'channel': xqual,
+						'process-queue': kii,
+						'start-time': elapsed(),
 					}
+
+					next_channel = _launch(status)
+					if next_channel is None:
+						queue.finish(ident)
+						available.append(lid)
+						continue
+					else:
+						status['start-time'] = elapsed()
+						ioa.connect(lid, next_channel)
 
 					monitor = monitors[lid]
 					monitor.update(status)
 					stctl.clear(monitor)
 					stctl.reflect(monitor)
 
-				if queue.terminal() and not statusd:
-					# Queue has nothing and statusd is empty? EOF.
-					processing = False
-					stctl.flush()
-					continue
+				# Queue processed, but monitors are still available?
+				for lid in available:
+					stctl.clear(monitors[lid])
 
 				stctl.flush()
+				if queue.terminal():
+					if not statusd:
+						# Queue has nothing and statusd is empty? EOF.
+						processing = False
+						continue
 
 			# Cycle through sources, flush when complete.
 			for lid, sframes in ioa:
@@ -378,19 +416,25 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 
 				if sframes is None:
 					# Closed.
+					pid = status['pid']
+					exit_status = execution.reap(pid, options=0)
+
+					# Send final snapshot to output. (stdout)
+					_transmit(pack, output, stctl, monitor, status)
+					output.flush()
+
+					next_channel = _launch(status)
+					if next_channel is not None:
+						status['start-time'] = elapsed()
+						ioa.connect(lid, next_channel)
+						stctl.clear(monitor)
+						stctl.reflect(monitor)
+						continue
+
 					queue.finish(status['source'])
 					del statusd[lid]
 					available.append(lid)
-					exit_status = execution.reap(status['pid'], options=0)
 
-					# Send final snapshot to output. (stdout)
-					status['finished'] = str(status['finished']).rjust(5, ' ')
-					monitor.update(status)
-					cells, mss = monitor.snapshot()
-					synop = status['type'] + ': ' + mss + stctl.context.reset_text().decode('utf-8')
-
-					output.write(pack((status['channel'], transaction(synop, duration))))
-					output.flush()
 					status.clear()
 					continue
 
@@ -403,34 +447,40 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 					xacts[channel].append(msg)
 
 					if evtype == 'transaction-stopped':
-						start, *messages, stop = xacts.pop(channel)
-						start_data = start.msg_parameters['data']
-						stop_data = stop.msg_parameters['data']
+						totals['executing'] -= 1
+						status['executing'] -= 1
 
-						status['utime'] += stop_data.get_parameter('user')
-						status['stime'] += stop_data.get_parameter('system')
-
-						totals['utime'] += stop_data.get_parameter('user')
-						totals['stime'] += stop_data.get_parameter('system')
-
-						start_time = start_data.get_parameter('time-offset')
-						stop_time = stop_data.get_parameter('time-offset')
-
-						duration = (stop_time - start_time)
-
-						exit_code = stop_data.get_parameter('status')
-						if exit_code != 0:
-							status['failed'] += 1
-							totals['failed'] += 1
-							trap(output, xcontext, channel, stop_data, start_data, messages)
+						try:
+							start, *messages, stop = xacts.pop(channel)
+						except ValueError:
+							pass
 						else:
-							totals['finished'] += 1
-							totals['executing'] -= 1
+							start_data = start.msg_parameters['data']
+							stop_data = stop.msg_parameters['data']
+
+							u = stop_data.get_parameter('user')
+							s = stop_data.get_parameter('system')
+							status['utime'] += u
+							status['stime'] += s
+							totals['utime'] += u
+							totals['stime'] += s
+
+							start_time = start_data.get_parameter('time-offset')
+							stop_time = stop_data.get_parameter('time-offset')
+
+							duration = (stop_time - start_time)
+
+							exit_code = stop_data.get_parameter('status')
+							if exit_code != 0:
+								status['failed'] += 1
+								totals['failed'] += 1
+								#trap(output, xcontext, channel, stop_data, start_data, messages)
+							else:
+								totals['finished'] += 1
+								status['finished'] += 1
 					elif evtype == 'transaction-started':
 						totals['executing'] += 1
-
-				status['finished'] = counts['transaction-stopped'] - status['failed']
-				status['executing'] = str(counts['transaction-started'] - status['finished'])
+						status['executing'] += 1
 
 				start_offset = status['start-time']
 				utime = status['utime']
