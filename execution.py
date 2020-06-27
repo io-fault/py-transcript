@@ -192,6 +192,7 @@ def singledispatch(error, output, controls, trap, invocations):
 	from ..system import query
 	from ..time.sysclock import now, elapsed
 	from ..status import frames
+	from .io import spawnframes
 
 	pack = frames.stdio()[1]
 	hostname = query.hostname()
