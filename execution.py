@@ -326,7 +326,7 @@ def _transmit(pack, output, stctl, monitor, status):
 
 	output.write(pack((status['channel'], transaction(synop, status['duration']))))
 
-def dispatch(error, output, control, monitors, summary, queue, trap, plan, range=range, next=next):
+def dispatch(error, output, control, monitors, summary, title, queue, trap, plan, range=range, next=next):
 	"""
 	# Execute a sequence of system commands while displaying their status
 	# according to the transaction messages they emit to standard out.
@@ -363,7 +363,7 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 		'stime': 0.0,
 		'utime': 0.0,
 		'type': 'aggregate',
-		'title': "SUMMARY[*]",
+		'title': title + "[*]",
 	}
 	summary.update(totals)
 
@@ -384,7 +384,7 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 
 					next_channel = _launch(status)
 					if next_channel is None:
-						queue.finish(ident)
+						queue.finish(status['source'])
 						available.append(lid)
 						continue
 					else:
@@ -436,6 +436,9 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 					del statusd[lid]
 					available.append(lid)
 
+					totals['title'] = "%s[%d/%d]" %((title,)+queue.status())
+					summary.update(totals)
+					stctl.reflect(summary)
 					status.clear()
 					continue
 
@@ -500,6 +503,7 @@ def dispatch(error, output, control, monitors, summary, queue, trap, plan, range
 			duration /= 1000 # convert to float seconds
 			totals['usage'] = [('p', 100*utime/duration), ('k', 100*stime/duration)]
 			totals['duration'] = duration
+			totals['title'] = "%s[%d/%d]" %((title,)+queue.status())
 			summary.update(totals)
 			stctl.reflect(summary)
 			stctl.flush()
