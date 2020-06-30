@@ -50,10 +50,11 @@ class Layout(object):
 		"""
 		self.labels[field] = text
 
-	def __init__(self, fields:Fields):
+	def __init__(self, fields:Fields, **updates):
 		self.labels = {}
 		self.order = [x[0] for x in fields]
 		self.cells = dict(fields)
+		self.cells.update(updates.items())
 
 	def fields(self):
 		"""

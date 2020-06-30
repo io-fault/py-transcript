@@ -16,6 +16,7 @@ def title(category, dimensions):
 	return str(category) + '[' + ']['.join(dimensions) + ']'
 
 _metric_units = [
+	('', '', 0),
 	('kilo', 'k', 3),
 	('mega', 'M', 6),
 	('giga', 'G', 9),
@@ -40,7 +41,7 @@ def _strings(value, formatting="{:.1f}".format):
 	return (formatting(r), suffix)
 
 def r_count(field, value):
-	if isinstance(value, str) or value < 100000:
+	if isinstance(value, str) or (value < 100000 and not isinstance(value, float)):
 		n = str(value)
 		unit = ''
 	else:
@@ -55,14 +56,12 @@ def r_usage(value, color='blue'):
 	if not value:
 		return
 
-	for t, count in value[:-1]:
-		yield ('usage', "{:.1f}".format(count))
-		yield ('usage-context-'+t, t)
+	for count in value[:-1]:
+		yield from r_count('usage', count)
 		yield ('plain', '/')
 
-	t, count = value[-1]
-	yield ('usage', "{:.1f}".format(count))
-	yield ('usage-context-'+t, t)
+	count = value[-1]
+	yield from r_count('usage', count)
 
 def r_label(value):
 	start, keycode, end = value
@@ -74,9 +73,9 @@ def r_label(value):
 
 # Display order.
 _order = [
-	('title', -32),
+	('title', None),
 	('duration', 6),
-	('usage', 32),
+	('usage', 14),
 	('executing', 8),
 	('failed', 8),
 	('finished', 8),
@@ -91,14 +90,10 @@ _formats = [
 	('d', "finished", 'green', tools.partial(r_count, 'finished')),
 ]
 
-def configure(order, formats):
-	l = terminal.Layout(order)
+def configure(order, formats, title=32):
+	l = terminal.Layout(order, title=-title)
 	t = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
 	t.define('unit-label', textcolor=palette.colors['gray'])
-	t.define('usage-context-p', textcolor=palette.colors['gray'])
-	t.define('usage-context-k', textcolor=palette.colors['gray'])
-	t.define('usage-context-receive', textcolor=palette.colors['gray'])
-	t.define('usage-context-transmit', textcolor=palette.colors['gray'])
 	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
 	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
 	t.define('data-rate', textcolor=palette.colors['gray'])
@@ -110,7 +105,7 @@ def configure(order, formats):
 
 	return t, l
 
-ATheme, ALayout = configure(_order, _formats)
+ATheme, ALayout = configure(_order, _formats, title=32)
 
 def aggregate(lanes=1, width=80, layout=ALayout, theme=ATheme):
 	"""
@@ -208,7 +203,7 @@ def singledispatch(error, output, controls, trap, invocations):
 				'executing': 0,
 				'failed': 0,
 				'finished': 0,
-				'usage': [('p', 0.0), ('k', 0.0)],
+				'usage': [0.0, 0.0],
 				'duration': 0.0,
 				'title': title(category, dimensions),
 				'start-time': elapsed(),
@@ -263,7 +258,7 @@ def singledispatch(error, output, controls, trap, invocations):
 
 				duration = (elapsed().decrease(start_offset).select('millisecond') or 1)
 				duration /= 1000 # convert to float seconds
-				status['usage'] = [('p', 100*utime/duration), ('k', 100*stime/duration)]
+				status['usage'] = [100*utime/duration, 100*stime/duration]
 				status['duration'] = duration
 
 				monitor.update(status)
@@ -291,7 +286,7 @@ def _launch(status, stderr=2, stdin=0):
 		'duration': 0.0,
 		'stime': 0.0,
 		'utime': 0.0,
-		'usage': [('p', 0.0), ('k', 0.0)],
+		'usage': [0.0, 0.0],
 		'counts': collections.Counter(),
 		'messages': 0,
 		'transactions': collections.defaultdict(list),
@@ -357,7 +352,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 		'executing': 0,
 		'failed': 0,
 		'finished': 0,
-		'usage': [('p', 0.0), ('k', 0.0)],
+		'usage': [0.0, 0.0],
 		'duration': 0.0,
 		'start-time': elapsed(),
 		'stime': 0.0,
@@ -491,7 +486,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 				stime = status['stime']
 				duration = (elapsed().decrease(start_offset).select('millisecond') or 1)
 				duration /= 1000 # convert to float seconds
-				status['usage'] = [('p', 100*utime/duration), ('k', 100*stime/duration)]
+				status['usage'] = [100*utime/duration, 100*stime/duration]
 				status['duration'] = duration
 
 				monitor.update(status)
@@ -501,7 +496,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 			stime = totals['stime']
 			duration = (elapsed().decrease(totals['start-time']).select('millisecond') or 1)
 			duration /= 1000 # convert to float seconds
-			totals['usage'] = [('p', 100*utime/duration), ('k', 100*stime/duration)]
+			totals['usage'] = [100*utime/duration, 100*stime/duration]
 			totals['duration'] = duration
 			totals['title'] = "%s[%d/%d]" %((title,)+queue.status())
 			summary.update(totals)
