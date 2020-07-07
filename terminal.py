@@ -79,6 +79,16 @@ class Theme(object):
 		]
 
 	@staticmethod
+	def r_transparent(value:typing.Sequence[Formatter]):
+		"""
+		# Render method expecting and returning a sequence of formatting pairs.
+
+		# Used in cases where the field wishes to control theme-relative
+		# formatting directly.
+		"""
+		return list(value)
+
+	@staticmethod
 	def r_duration(value):
 		"""
 		# Render method for common duration fields.
