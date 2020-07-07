@@ -235,11 +235,11 @@ class Monitor(object):
 		values = (x[1] for x in phrases)
 
 		n = (lambda x: self.theme.render('Label', x))
-		sep = (n(': '))
+		sep = (n(' '))
 		lseps = (sep for i in range(len(phrases)))
 		fseps = map(n, self.layout.separators(len(phrases)))
 
-		return tools.interlace(labels, lseps, values, fseps)
+		return tools.interlace(values, lseps, labels, fseps)
 
 	def snapshot(self, encoding='utf-8') -> bytes:
 		"""
@@ -284,7 +284,7 @@ class Control(object):
 		"""
 		# Render and emit the changes that occurred.
 
-		# Operation is buffered and must flushed to be effective.
+		# Operation is buffered and must be flushed to be displayed.
 		"""
 
 		if not monitor._prefix:
