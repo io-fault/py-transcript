@@ -377,23 +377,21 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						'start-time': elapsed(),
 					}
 
+					monitor = monitors[lid]
+
 					next_channel = _launch(status)
 					if next_channel is None:
 						queue.finish(status['source'])
+						stctl.clear(monitor)
 						available.append(lid)
 						continue
 					else:
 						status['start-time'] = elapsed()
 						ioa.connect(lid, next_channel)
+						stctl.clear(monitor)
 
-					monitor = monitors[lid]
 					monitor.update(status)
-					stctl.clear(monitor)
 					stctl.reflect(monitor)
-
-				# Queue processed, but monitors are still available?
-				for lid in available:
-					stctl.clear(monitors[lid])
 
 				stctl.flush()
 				if queue.terminal():
@@ -424,6 +422,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						status['start-time'] = elapsed()
 						ioa.connect(lid, next_channel)
 						stctl.clear(monitor)
+						monitor.update(status)
 						stctl.reflect(monitor)
 						continue
 
@@ -435,6 +434,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					summary.update(totals)
 					stctl.reflect(summary)
 					status.clear()
+					stctl.clear(monitor)
 					continue
 
 				nframes = len(sframes)
