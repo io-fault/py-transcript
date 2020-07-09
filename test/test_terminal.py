@@ -110,6 +110,22 @@ def test_Metrics_trim(test):
 	# Length is still three because it's the edge.
 	test/len(m.history) == 3
 
+def test_Metrics_trim_partial(test):
+	m = module.Metrics(window=4)
+	m.update('k', 10)
+	m.commit(2)
+	m.update('k', 10)
+	m.commit(1)
+	m.update('k', 10)
+	m.commit(2)
+	test/len(m.history) == 3
+
+	test/(m.rate('k') * 5) == 30
+	m.trim()
+	test/(m.rate('k') * 4) == 25
+	test/len(m.history) == 3
+	test/int(m.history[0][0]) == 1
+
 def test_Metrics_trim_exclusion(test):
 	m = module.Metrics(window=4)
 	m.update('k', 10)
