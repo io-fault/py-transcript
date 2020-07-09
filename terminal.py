@@ -24,6 +24,95 @@ def duration_repr(seconds) -> typing.Tuple[float, str]:
 
 	return (hours / 24, 'd')
 
+class Metrics(object):
+	"""
+	# Storage class for monitor field data.
+	# Maintains a history along with a totals snapshot.
+	"""
+
+	def __init__(self, window=8):
+		self.window = window
+		self.clear()
+
+	def clear(self):
+		self.duration = 0 # Implied time field.
+		self.current = collections.defaultdict(int)
+		self.snapshot = collections.defaultdict(int)
+		self.history = []
+
+	def recent(self, field:str):
+		"""
+		# Retrieve the value of the field as it's found within the history.
+		"""
+		i = 0
+		for d, x in self.history:
+			i += x[field]
+		return i
+
+	def rate(self, field:str):
+		"""
+		# The rate of the field with respect to the recent history.
+		# The overall rate can be calculated with
+		# (syntax/python)`m.total(field0) / m.duration`.
+		"""
+		i = 0
+		t = 0
+		for d, x in self.history:
+			i += x.get(field, 0)
+			t += d
+
+		return i / t
+
+	def total(self, field:str):
+		"""
+		# The total of the field according to the snapshot.
+		"""
+		return self.snapshot[field]
+
+	def update(self, key, value):
+		"""
+		# Update the total and the current.
+		"""
+		self.current[key] += value
+		self.snapshot[key] += value
+
+	def changes(self):
+		"""
+		# Create iterator reporting the fields with changes in current.
+		"""
+		return self.current.keys()
+
+	def commit(self, time):
+		self.history.append((time, self.current))
+		self.duration += time
+		self.current = collections.defaultdict(int)
+
+	def trim(self):
+		"""
+		# Remove entries from the history that are past the window.
+		"""
+		t = 0
+		i = None
+		data = None
+		for (d, data), i in zip(reversed(self.history), range(len(self.history) - 1, -1, -1)):
+			assert data is self.history[i][1]
+
+			t += d
+			if t > self.window:
+				break
+		else:
+			# Nothing beyond window.
+			return
+
+		# Maintain some data for the time that is still within the window.
+		f = (t - self.window) / d
+		del self.history[:i]
+		for k, v in data.items():
+			data[k] *= f
+
+		assert self.history[0][1] is data
+		self.history[0] = ((t - self.window), data)
+
 class Layout(object):
 	"""
 	# The set, sizes, and ordering of fields present in a monitor.
