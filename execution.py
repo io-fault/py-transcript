@@ -361,12 +361,12 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						stctl.clear(monitor)
 						available.append(lid)
 						continue
-					else:
-						monitor.title(next_channel[1], *next_channel[2])
-						ioa.connect(lid, next_channel[0])
-						stctl.clear(monitor)
 
-					stctl.reflect(monitor)
+					monitor.title(next_channel[1], *next_channel[2])
+					ioa.connect(lid, next_channel[0])
+					stctl.clear(monitor)
+					stctl.frame(monitor)
+					stctl.reflect(monitor, monitor.render())
 
 				stctl.flush()
 				if queue.terminal():
@@ -398,7 +398,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						stctl.clear(monitor)
 						monitor.metrics.clear()
 						monitor.title(next_channel[1], *next_channel[2])
-						stctl.reflect(monitor)
+						stctl.frame(monitor)
+						stctl.reflect(monitor, monitor.render())
 						continue
 
 					queue.finish(status['source'])
@@ -406,7 +407,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					available.append(lid)
 
 					summary.title(title, '/'.join(map(str, queue.status())))
-					stctl.reflect(summary)
+					stctl.frame(summary)
+					stctl.reflect(summary, summary.render())
 					status.clear()
 					stctl.clear(monitor)
 					continue
@@ -433,8 +435,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 							u = stop_data.get_parameter('user')
 							s = stop_data.get_parameter('system')
 							for m in (metrics, mtotals):
-								m.update('process-time', u)
-								m.update('kernel-time', s)
+								#m.update('process-time', u)
+								#m.update('kernel-time', s)
 								m.update('usage', u + s)
 
 							start_time = start_data.get_parameter('time-offset')
@@ -464,7 +466,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 				deltas = set(mm.changes())
 				mm.commit(duration)
 				mm.trim()
-				stctl.reflect(m)
+				stctl.reflect(m, m.delta(deltas))
 
 			tdeltas = set(mtotals.changes())
 			mtotals.commit(duration)
@@ -472,7 +474,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 
 			#totals['usage'] = [100*utime/duration, 100*stime/duration]
 			summary.title(title, '/'.join(map(str, queue.status())))
-			stctl.reflect(summary)
+			stctl.frame(summary)
+			stctl.reflect(summary, summary.delta(tdeltas))
 			stctl.flush()
 		else:
 			pass

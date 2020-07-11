@@ -247,15 +247,20 @@ class Monitor(object):
 	"""
 
 	def __init__(self, theme:Theme, layout:Layout, context:matrix.Context):
-		self.layout = layout # Field Ordering and Width
 		self.theme = theme # Style sets and value rendering methods.
 		self.context = context # fault.terminal drawing context.
+		self.layout = layout # Field Ordering and Width
 		self.metrics = Metrics() # Raw value sets and window.
 
 		# Monitor local:
+		self._title = None
 		self._prefix = None
 		self._suffix = None
 		self._positions = list(self._calculate_fields())
+
+		self._pcache = {}
+		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
+			self._pcache[k] = (fpad, position, cells, lc)
 
 	def _calculate_fields(self, alignment=1):
 		Phrase = self.context.Phrase
@@ -300,9 +305,6 @@ class Monitor(object):
 		layout = self.layout
 		metrics = self.metrics
 
-		rtitle = render('title', self._title)
-		yield None, rtitle, 0, 0
-
 		label = render('Label', "duration")
 		value = render('duration', metrics.duration)
 		yield label, value, 40, 8 - value.cellcount()
@@ -315,11 +317,28 @@ class Monitor(object):
 
 			yield label, value, position + offset, (cells - ncells)
 
+	def delta(self, fields, offset=58):
+		render = self.theme.render
+		labels = self.layout.labels
+		metrics = self.metrics
+
+		label = render('Label', "duration")
+		value = render('duration', metrics.duration)
+		yield label, value, 40, 8 - value.cellcount()
+
+		for k, (fpad, position, cells, lc) in ((k, self._pcache[k]) for k in fields):
+			value = render(k, metrics.total(k))
+			lstr = labels.get(k, k)
+			ncells = value.cellcount()
+			label = render('Label', lstr)
+
+			yield label, value, position + offset, (cells - ncells)
+
 	def phrase(self) -> matrix.Context.Phrase:
 		"""
 		# The monitor's image as a single phrase instance.
 		"""
-		title, *phrases = self.render()
+		phrases = list(self.render())
 		labels = (x[0] for x in phrases)
 		values = (x[1] for x in phrases)
 
@@ -369,17 +388,15 @@ class Control(object):
 		actx.context_set_dimensions((width, height))
 		return actx
 
-	def reflect(self, monitor):
+	def frame(self, monitor, offset=0):
 		"""
-		# Render and emit the changes that occurred.
+		# Render and emit the prefix, title, and suffix.
 
 		# Operation is buffered and must be flushed to be displayed.
 		"""
 
-		if not monitor._prefix:
-			offset = 0
-		else:
-			offset = monitor._prefix.cellcount() + 2
+		if monitor._prefix:
+			offset = offset + monitor._prefix.cellcount() + 2
 
 			i = itertools.chain.from_iterable([
 				(monitor.context.seek((0, 0)),),
@@ -388,30 +405,13 @@ class Control(object):
 			self._buffer.append(b''.join(i))
 			self._buffer.append(monitor.context.reset_text())
 
-		for label, ph, position, pad in monitor.render():
-			if pad > 0:
-				i = itertools.chain.from_iterable([
-					(monitor.context.seek((position+offset, 0)), b' ' * pad),
-					monitor.context.render(ph),
-					(b' ',),
-					monitor.context.render(label) if label else (),
-				])
-				self._buffer.append(b''.join(i))
-			else:
-				if label is None:
-					i = itertools.chain.from_iterable([
-						(monitor.context.seek((position+offset, 0)),),
-						monitor.context.render(ph),
-						(b':',),
-					])
-				else:
-					i = itertools.chain.from_iterable([
-						(monitor.context.seek((position+offset, 0)),),
-						monitor.context.render(label) if label else (),
-						(b': ',),
-						monitor.context.render(ph),
-					])
-				self._buffer.append(b''.join(i))
+		ph = monitor.theme.render('title', monitor._title)
+		i = itertools.chain.from_iterable([
+			(monitor.context.seek((offset, 0)),),
+			monitor.context.render(ph),
+			(b':',),
+		])
+		self._buffer.append(b''.join(i))
 
 		self._buffer.append(monitor.context.reset_text())
 
@@ -421,6 +421,40 @@ class Control(object):
 			])
 			self._buffer.append(b''.join(i))
 			self._buffer.append(monitor.context.reset_text())
+
+	def reflect(self, monitor, fields):
+		"""
+		# Render and emit the changes that occurred.
+
+		# Operation is buffered and must be flushed to be displayed.
+		"""
+
+		for label, ph, position, pad in fields:
+			if pad > 0:
+				i = itertools.chain.from_iterable([
+					(monitor.context.seek((position, 0)), b' ' * pad),
+					monitor.context.render(ph),
+					(b' ',),
+					monitor.context.render(label) if label else (),
+				])
+				self._buffer.append(b''.join(i))
+			else:
+				if label is None:
+					i = itertools.chain.from_iterable([
+						(monitor.context.seek((position, 0)),),
+						monitor.context.render(ph),
+						(b':',),
+					])
+				else:
+					i = itertools.chain.from_iterable([
+						(monitor.context.seek((position, 0)),),
+						monitor.context.render(label) if label else (),
+						(b': ',),
+						monitor.context.render(ph),
+					])
+				self._buffer.append(b''.join(i))
+
+		self._buffer.append(monitor.context.reset_text())
 
 	def flush(self):
 		"""
