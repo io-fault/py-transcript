@@ -305,7 +305,7 @@ class Monitor(object):
 
 		label = render('Label', "duration")
 		value = render('duration', metrics.duration)
-		yield label, value, 42, 8 - value.cellcount()
+		yield label, value, 40, 8 - value.cellcount()
 
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
 			value = render(k, metrics.total(k))

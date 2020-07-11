@@ -90,8 +90,8 @@ _formats = [
 	('d', "finished", 'green', tools.partial(r_count, 'finished')),
 ]
 
-def configure(order, formats, title=32):
-	l = terminal.Layout(order, title=-title)
+def configure(order, formats):
+	l = terminal.Layout(order)
 	t = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
 	t.implement('duration', terminal.Theme.r_duration)
 	t.implement('title', r_title)
@@ -109,7 +109,7 @@ def configure(order, formats, title=32):
 
 	return t, l
 
-ATheme, ALayout = configure(_order, _formats, title=48)
+ATheme, ALayout = configure(_order, _formats)
 
 def aggregate(lanes=1, width=80, layout=ALayout, theme=ATheme):
 	"""
