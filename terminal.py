@@ -271,7 +271,7 @@ class Monitor(object):
 		for f in self.layout.order:
 			cells = cc[f]
 			label = self.theme.render('label-'+f, fl[f])
-			lc = label.cellcount() if label else -2
+			lc = label.cellcount()
 			usage = abs(cells) + lc + 2
 			yield (position, cells, lc)
 
@@ -394,21 +394,22 @@ class Control(object):
 
 		# Operation is buffered and must be flushed to be displayed.
 		"""
+		context = monitor.context
 
 		if monitor._prefix:
 			offset = offset + monitor._prefix.cellcount() + 2
 
 			i = itertools.chain.from_iterable([
-				(monitor.context.seek((0, 0)),),
-				monitor.context.render(monitor._prefix),
+				(context.seek((0, 0)),),
+				context.render(monitor._prefix),
 			])
 			self._buffer.append(b''.join(i))
 			self._buffer.append(monitor.context.reset_text())
 
 		ph = monitor.theme.render('title', monitor._title)
 		i = itertools.chain.from_iterable([
-			(monitor.context.seek((offset, 0)),),
-			monitor.context.render(ph),
+			(context.seek((offset, 0)),),
+			context.render(ph),
 			(b':',),
 		])
 		self._buffer.append(b''.join(i))
@@ -417,12 +418,12 @@ class Control(object):
 
 		if monitor._suffix:
 			i = itertools.chain.from_iterable([
-				monitor.context.render(monitor._suffix),
+				context.render(monitor._suffix),
 			])
 			self._buffer.append(b''.join(i))
 			self._buffer.append(monitor.context.reset_text())
 
-	def update(self, monitor, fields):
+	def update(self, monitor, fields, offset=0):
 		"""
 		# Render and emit the given &fields.
 
@@ -432,7 +433,7 @@ class Control(object):
 
 		for label, ph, position, pad in fields:
 			i = itertools.chain.from_iterable([
-				(context.seek((position, 0)), b' ' * pad),
+				(context.seek((position+offset, 0)), b' ' * pad),
 				context.render(ph),
 				(b' ',),
 				context.render(label) if label else (),
