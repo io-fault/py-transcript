@@ -30,8 +30,7 @@ class Metrics(object):
 	# Maintains a history along with a totals snapshot.
 	"""
 
-	def __init__(self, window=8):
-		self.window = window
+	def __init__(self):
 		self.clear()
 
 	def clear(self):
@@ -87,9 +86,9 @@ class Metrics(object):
 		self.duration += time
 		self.current = collections.defaultdict(int)
 
-	def trim(self):
+	def trim(self, window=8):
 		"""
-		# Remove entries from the history that are past the window.
+		# Remove history records that are past the &window.
 		"""
 		t = 0
 		i = None
@@ -98,20 +97,20 @@ class Metrics(object):
 			assert data is self.history[i][1]
 
 			t += d
-			if t > self.window:
+			if t > window:
 				break
 		else:
 			# Nothing beyond window.
 			return
 
 		# Maintain some data for the time that is still within the window.
-		f = (t - self.window) / d
+		f = (t - window) / d
 		del self.history[:i]
 		for k, v in data.items():
 			data[k] *= f
 
 		assert self.history[0][1] is data
-		self.history[0] = ((t - self.window), data)
+		self.history[0] = ((t - window), data)
 
 class Layout(object):
 	"""
@@ -245,18 +244,13 @@ class Monitor(object):
 
 	# Structure holding the target &matrix.Context with the rendering
 	# function and an associated state snapshot.
-
-	# [ Engineering ]
-	# &Monitor and &Theme have an instance and type relationship. In this case,
-	# &Theme controls the formatting and styles of the field *contents*, and
-	# &Monitor controls field placement and context(prefix and suffix).
 	"""
 
 	def __init__(self, theme:Theme, layout:Layout, context:matrix.Context):
-		self.context = context
-		self.layout = layout
-		self.theme = theme
-		self.metrics = Metrics()
+		self.layout = layout # Field Ordering and Width
+		self.theme = theme # Style sets and value rendering methods.
+		self.context = context # fault.terminal drawing context.
+		self.metrics = Metrics() # Raw value sets and window.
 
 		# Monitor local:
 		self._prefix = None
