@@ -268,7 +268,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					ioa.connect(lid, next_channel[0])
 					stctl.clear(monitor)
 					stctl.frame(monitor)
-					stctl.reflect(monitor, monitor.render())
+					stctl.update(monitor, monitor.render())
 
 				stctl.flush()
 				if queue.terminal():
@@ -301,7 +301,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						monitor.metrics.clear()
 						monitor.title(next_channel[1], *next_channel[2])
 						stctl.frame(monitor)
-						stctl.reflect(monitor, monitor.render())
+						stctl.update(monitor, monitor.render())
 						continue
 
 					queue.finish(status['source'])
@@ -310,7 +310,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 
 					summary.title(title, '/'.join(map(str, queue.status())))
 					stctl.frame(summary)
-					stctl.reflect(summary, summary.render())
+					stctl.update(summary, summary.render())
 					status.clear()
 					stctl.clear(monitor)
 					continue
@@ -368,7 +368,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 				deltas = set(mm.changes())
 				mm.commit(duration)
 				mm.trim()
-				stctl.reflect(m, m.delta(deltas))
+				stctl.update(m, m.delta(deltas))
 
 			tdeltas = set(mtotals.changes())
 			mtotals.commit(duration)
@@ -377,7 +377,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 			#totals['usage'] = [100*utime/duration, 100*stime/duration]
 			summary.title(title, '/'.join(map(str, queue.status())))
 			stctl.frame(summary)
-			stctl.reflect(summary, summary.delta(tdeltas))
+			stctl.update(summary, summary.delta(tdeltas))
 			stctl.flush()
 		else:
 			pass

@@ -390,7 +390,7 @@ class Control(object):
 
 	def frame(self, monitor, offset=0):
 		"""
-		# Render and emit the prefix, title, and suffix.
+		# Render and emit the prefix, title, and suffix of the &monitor.
 
 		# Operation is buffered and must be flushed to be displayed.
 		"""
@@ -422,39 +422,24 @@ class Control(object):
 			self._buffer.append(b''.join(i))
 			self._buffer.append(monitor.context.reset_text())
 
-	def reflect(self, monitor, fields):
+	def update(self, monitor, fields):
 		"""
-		# Render and emit the changes that occurred.
+		# Render and emit the given &fields.
 
 		# Operation is buffered and must be flushed to be displayed.
 		"""
+		context = monitor.context
 
 		for label, ph, position, pad in fields:
-			if pad > 0:
-				i = itertools.chain.from_iterable([
-					(monitor.context.seek((position, 0)), b' ' * pad),
-					monitor.context.render(ph),
-					(b' ',),
-					monitor.context.render(label) if label else (),
-				])
-				self._buffer.append(b''.join(i))
-			else:
-				if label is None:
-					i = itertools.chain.from_iterable([
-						(monitor.context.seek((position, 0)),),
-						monitor.context.render(ph),
-						(b':',),
-					])
-				else:
-					i = itertools.chain.from_iterable([
-						(monitor.context.seek((position, 0)),),
-						monitor.context.render(label) if label else (),
-						(b': ',),
-						monitor.context.render(ph),
-					])
-				self._buffer.append(b''.join(i))
+			i = itertools.chain.from_iterable([
+				(context.seek((position, 0)), b' ' * pad),
+				context.render(ph),
+				(b' ',),
+				context.render(label) if label else (),
+			])
+			self._buffer.append(b''.join(i))
 
-		self._buffer.append(monitor.context.reset_text())
+		self._buffer.append(context.reset_text())
 
 	def flush(self):
 		"""
