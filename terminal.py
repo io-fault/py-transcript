@@ -117,6 +117,8 @@ class Layout(object):
 	"""
 	# The set, sizes, and ordering of fields present in a monitor.
 	"""
+
+	# Identifier-width(cell count) pairs.
 	Definition = typing.Tuple[str, int]
 	Fields = typing.Sequence[Definition]
 
@@ -254,9 +256,9 @@ class Monitor(object):
 		self.context = context
 		self.layout = layout
 		self.theme = theme
+		self.metrics = Metrics()
 
 		# Monitor local:
-		self._image = {}
 		self._prefix = None
 		self._suffix = None
 		self._positions = list(self._calculate_fields())
@@ -281,28 +283,6 @@ class Monitor(object):
 
 		yield (position, 0, 0)
 
-	def connect(self, title):
-		"""
-		# Connect the monitor to a new conceptual data source.
-		"""
-		self._last = self._offset = sysclock.elapsed()
-		self._image = {}
-		self.prefix(())
-		self.suffix(())
-		self._positions = self._calculate_fields()
-
-	def _update(self, discrete, continuous):
-		ntime = sysclock.elapsed()
-		dt = ntime.decrease(self._last)
-		self._last = ntime
-		d['time'].append(dt)
-
-	def update(self, fields):
-		"""
-		# Update the field values of the monitor's image.
-		"""
-		self._image.update(fields)
-
 	def prefix(self, *words):
 		"""
 		# Attach a constant phrase to the beginning of the monitor.
@@ -315,21 +295,37 @@ class Monitor(object):
 		"""
 		self._suffix = matrix.Context.Phrase.from_words(*words)
 
-	def render(self):
-		theme = self.theme
+	def title(self, title, *dimensions):
+		"""
+		# Assign the monitor's title and dimension identifiers.
+		"""
+		self._title = (title, dimensions)
+
+	def render(self, offset=58):
+		render = self.theme.render
 		layout = self.layout
+		metrics = self.metrics
+
+		rtitle = render('title', self._title)
+		yield None, rtitle, 0, 0
+
+		label = render('Label', "duration")
+		value = render('duration', metrics.duration)
+		yield label, value, 42, 8 - value.cellcount()
 
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
-			value = theme.render(k, self._image[k])
+			value = render(k, metrics.total(k))
 			lstr = layout.labels[k]
-			label = lstr and theme.render('Label', lstr) or None
-			yield label, value, position, (cells - value.cellcount())
+			ncells = value.cellcount()
+			label = render('Label', lstr)
+
+			yield label, value, position + offset, (cells - ncells)
 
 	def phrase(self) -> matrix.Context.Phrase:
 		"""
 		# The monitor's image as a single phrase instance.
 		"""
-		phrases = [x for x in self.render() if x[0] is not None]
+		title, *phrases = self.render()
 		labels = (x[0] for x in phrases)
 		values = (x[1] for x in phrases)
 
