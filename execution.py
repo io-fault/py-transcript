@@ -140,49 +140,6 @@ def transaction(synopsis, duration):
 
 	return msg
 
-def deltas(trap, transactions, counts, frames, log=(lambda x: None)):
-	xacts = transactions
-	started = 0
-	exits = 0
-	failed = 0
-	utime = 0
-	stime = 0
-
-	for channel, msg in frames:
-		evtype = msg.msg_event.symbol
-		counts[evtype] += 1
-		xacts[channel].append(msg)
-
-		if evtype == 'transaction-stopped':
-			exits += 1
-			start, *messages, stop = xacts.pop(channel)
-			record = (start, messages, stop)
-
-			start_data = start.msg_parameters['data']
-			stop_data = stop.msg_parameters['data']
-
-			utime += stop_data.get_parameter('user')
-			stime += stop_data.get_parameter('system')
-
-			start_time = start_data.get_parameter('time-offset')
-			stop_time = stop_data.get_parameter('time-offset')
-			duration = stop_time - start_time
-
-			exit_code = stop_data.get_parameter('status')
-			if exit_code != 0:
-				failed += 1
-				trap(channel, record)
-
-			log((channel, record, duration))
-		elif evtype == 'transaction-started':
-			started += 1
-
-	yield ('started', started)
-	yield ('utime', utime)
-	yield ('stime', stime)
-	yield ('finished', exits - failed)
-	yield ('failed', failed)
-
 def _launch(status, stderr=2, stdin=0):
 	try:
 		category, dimensions, xqual, xcontext, ki = next(status['process-queue'])
