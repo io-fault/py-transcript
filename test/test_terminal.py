@@ -6,11 +6,6 @@ from .. import terminal as module
 def test_Metrics_init(test):
 	# Sanity.
 	m = module.Metrics()
-	test/m.window == 8
-
-	m = module.Metrics(window=12)
-	test/m.window == 12
-
 	test/m.history == []
 	test/m.current == {}
 	test/m.snapshot == {}
@@ -95,7 +90,7 @@ def test_Metrics_changes(test):
 	test/set(m.changes()) == set()
 
 def test_Metrics_trim(test):
-	m = module.Metrics(window=4)
+	m = module.Metrics()
 	m.update('k', 10)
 	m.commit(2)
 	m.update('k', 10)
@@ -105,13 +100,13 @@ def test_Metrics_trim(test):
 	test/len(m.history) == 3
 
 	test/(m.rate('k') * 6) == 30
-	m.trim()
+	m.trim(4)
 	test/(m.rate('k') * 4) == 20
 	# Length is still three because it's the edge.
 	test/len(m.history) == 3
 
 def test_Metrics_trim_partial(test):
-	m = module.Metrics(window=4)
+	m = module.Metrics()
 	m.update('k', 10)
 	m.commit(2)
 	m.update('k', 10)
@@ -121,13 +116,13 @@ def test_Metrics_trim_partial(test):
 	test/len(m.history) == 3
 
 	test/(m.rate('k') * 5) == 30
-	m.trim()
+	m.trim(4)
 	test/(m.rate('k') * 4) == 25
 	test/len(m.history) == 3
 	test/int(m.history[0][0]) == 1
 
 def test_Metrics_trim_exclusion(test):
-	m = module.Metrics(window=4)
+	m = module.Metrics()
 	m.update('k', 10)
 	m.commit(2)
 	m.update('k', 10)
@@ -139,7 +134,7 @@ def test_Metrics_trim_exclusion(test):
 	test/len(m.history) == 4
 
 	test/(m.rate('k') * 6) == 30
-	m.trim()
+	m.trim(4)
 	test/(m.rate('k') * 4) == 20
 	# First entry fully exceeded window, so it was removed.
 	test/len(m.history) == 3

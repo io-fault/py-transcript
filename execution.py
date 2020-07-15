@@ -165,7 +165,7 @@ def _transmit(pack, output, stctl, monitor, channel):
 
 	output.write(pack((channel, transaction(synop, m.duration))))
 
-def dispatch(error, output, control, monitors, summary, title, queue, trap, plan, range=range, next=next):
+def dispatch(error, output, control, monitors, summary, title, queue, trap, plan, window=8, range=range, next=next):
 	"""
 	# Execute a sequence of system commands while displaying their status
 	# according to the transaction messages they emit to standard out.
@@ -177,7 +177,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 	from . import io
 	from ..system import query
 	from ..system import execution
-	from ..time.sysclock import now, elapsed
+	from ..time.sysclock import elapsed as time
 	from ..status import frames
 
 	unpack, pack = frames.stdio()
@@ -191,9 +191,10 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 	available = collections.deque(range(nmonitors))
 	statusd = {}
 	processing = True
-	last = elapsed()
+	last = time()
 	summary.title(title, '*')
 	mtotals = summary.metrics
+	mtotals.clear()
 
 	try:
 		ioa.__enter__()
@@ -205,9 +206,9 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					kii = iter(plan(ident))
 
 					status = statusd[lid] = {
+						'channel': None,
 						'source': ident,
 						'process-queue': kii,
-						'start-time': elapsed(),
 						'transactions': collections.defaultdict(list),
 					}
 
@@ -252,10 +253,11 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					output.flush()
 
 					next_channel = _launch(status)
+					monitor.metrics.clear()
+
 					if next_channel is not None:
 						ioa.connect(lid, next_channel[0])
 						stctl.clear(monitor)
-						monitor.metrics.clear()
 						monitor.title(next_channel[1], *next_channel[2])
 						stctl.frame(monitor)
 						stctl.update(monitor, monitor.render())
@@ -292,16 +294,13 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 							stop_data = stop.msg_parameters['data']
 
 							u = stop_data.get_parameter('user')
-							s = stop_data.get_parameter('system')
-							for m in (metrics, mtotals):
-								#m.update('process-time', u)
-								#m.update('kernel-time', s)
-								m.update('usage', u + s)
+							u += stop_data.get_parameter('system')
 
 							start_time = start_data.get_parameter('time-offset')
 							stop_time = stop_data.get_parameter('time-offset')
-
-							duration = (stop_time - start_time)
+							#duration = (stop_time - start_time)
+							metrics.update('usage', u)
+							mtotals.update('usage', u)
 
 							exit_code = stop_data.get_parameter('status')
 							if exit_code != 0:
@@ -315,23 +314,25 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						metrics.update('executing', 1)
 						mtotals.update('executing', 1)
 
-			next_time = elapsed()
-			duration = (next_time.decrease(last).select('millisecond') or 1)
+			# Calculate change in time for Metrics.commit.
+			next_time = time()
+			# millisecond precision
+			elapsed = (next_time.decrease(last).select('millisecond') or 1)
+			elapsed /= 1000 # convert to float seconds
 			last = next_time
-			duration /= 1000 # convert to float seconds
 
 			for m in monitors:
 				mm = m.metrics
 				deltas = set(mm.changes())
-				mm.commit(duration)
-				mm.trim()
+				mm.commit(elapsed)
+				mm.trim(window)
 				stctl.update(m, m.delta(deltas))
 
 			tdeltas = set(mtotals.changes())
-			mtotals.commit(duration)
-			mtotals.trim()
+			mtotals.commit(elapsed)
+			mtotals.trim(window)
+			#print(mtotals.recent('usage'), file=sys.stderr)
 
-			#totals['usage'] = [100*utime/duration, 100*stime/duration]
 			summary.title(title, '/'.join(map(str, queue.status())))
 			stctl.frame(summary)
 			stctl.update(summary, summary.delta(tdeltas))
@@ -339,7 +340,6 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 		else:
 			pass
 	finally:
-		summary.metrics.clear()
 		ioa.__exit__(None, None, None) # Exception has the same effect.
 		error.flush()
 		for lid in statusd:
@@ -349,3 +349,4 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 				pass
 			else:
 				exit_status = execution.reap(status['pid'], options=0)
+import sys

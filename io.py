@@ -73,7 +73,8 @@ class FrameArray(object):
 		from ..system import io
 		return (io.Array, io.alloc_input)
 
-	def __init__(self, readframe, encoding='utf-8', newline=b'\n'):
+	def __init__(self, readframe, encoding='utf-8', newline=b'\n', timeout=145):
+		self.timeout = timeout
 		self.newline = newline
 		self.encoding = encoding
 		self.unpack = readframe
@@ -107,7 +108,7 @@ class FrameArray(object):
 			pass
 
 	def collect(self):
-		with self._ioa:
+		with self._ioa.wait(self.timeout):
 			return [
 				(channel.link, channel.transfer(), channel.terminated, channel)
 				for channel in self._ioa.transfer()

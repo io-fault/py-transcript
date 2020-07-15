@@ -62,13 +62,25 @@ class Metrics(object):
 
 		return i / t
 
+	def overall(self, field:str):
+		"""
+		# The overall rate.
+		"""
+		return self.snapshot[field] / self.duration
+
+	def average(self, field:str):
+		"""
+		# The average of the field within the history.
+		"""
+		return sum(x.get(field, 0) for (d, x) in self.history) / len(self.history)
+
 	def total(self, field:str):
 		"""
 		# The total of the field according to the snapshot.
 		"""
 		return self.snapshot[field]
 
-	def update(self, key, value):
+	def update(self, key, value, count=1):
 		"""
 		# Update the total and the current.
 		"""
@@ -104,13 +116,16 @@ class Metrics(object):
 			return
 
 		# Maintain some data for the time that is still within the window.
-		f = (t - window) / d
+		time_removed = t - window
+		time_remains = d - time_removed
+
+		f = time_remains / d
 		del self.history[:i]
 		for k, v in data.items():
 			data[k] *= f
 
 		assert self.history[0][1] is data
-		self.history[0] = ((t - window), data)
+		self.history[0] = (time_remains, data)
 
 class Layout(object):
 	"""
@@ -246,11 +261,18 @@ class Monitor(object):
 	# function and an associated state snapshot.
 	"""
 
+	view_state_loop = {
+		'total': 'rate',
+		'rate': 'overall',
+		'overall': 'total',
+	}
+
 	def __init__(self, theme:Theme, layout:Layout, context:matrix.Context):
 		self.theme = theme # Style sets and value rendering methods.
 		self.context = context # fault.terminal drawing context.
 		self.layout = layout # Field Ordering and Width
 		self.metrics = Metrics() # Raw value sets and window.
+		self.view = {} # Field view identifying value filtering (rate vs total).
 
 		# Monitor local:
 		self._title = None
@@ -282,6 +304,15 @@ class Monitor(object):
 
 		yield (position, 0, 0)
 
+	def cycle(self, field):
+		"""
+		# Select a filter for reading the field.
+		"""
+
+		current = self.view.get(field, 'total')
+		next = self.view_state_loop[current]
+		self.view[field] = next
+
 	def prefix(self, *words):
 		"""
 		# Attach a constant phrase to the beginning of the monitor.
@@ -310,7 +341,12 @@ class Monitor(object):
 		yield label, value, 40, 8 - value.cellcount()
 
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
-			value = render(k, metrics.total(k))
+			readv = getattr(metrics, self.view.get(k, 'total'))
+			try:
+				value = render(k, readv(k))
+			except ZeroDivisionError:
+				value = render(k, metrics.total(k))
+
 			lstr = layout.labels[k]
 			ncells = value.cellcount()
 			label = render('Label', lstr)
@@ -327,7 +363,12 @@ class Monitor(object):
 		yield label, value, 40, 8 - value.cellcount()
 
 		for k, (fpad, position, cells, lc) in ((k, self._pcache[k]) for k in fields):
-			value = render(k, metrics.total(k))
+			readv = getattr(metrics, self.view.get(k, 'total'))
+			try:
+				value = render(k, readv(k))
+			except ZeroDivisionError:
+				value = render(k, metrics.total(k))
+
 			lstr = labels.get(k, k)
 			ncells = value.cellcount()
 			label = render('Label', lstr)
