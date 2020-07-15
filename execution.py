@@ -163,7 +163,7 @@ def _transmit(pack, output, stctl, monitor, channel):
 	cells, mss = monitor.snapshot()
 	synop = monitor._title[0] + ': ' + mss + stctl.context.reset_text().decode('utf-8')
 
-	output.write(pack((channel, transaction(synop, m.duration))))
+	output.write(pack((channel, transaction(synop, m.time))))
 
 def dispatch(error, output, control, monitors, summary, title, queue, trap, plan, window=8, range=range, next=next):
 	"""

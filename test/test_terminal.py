@@ -7,36 +7,38 @@ def test_Metrics_init(test):
 	# Sanity.
 	m = module.Metrics()
 	test/m.history == []
-	test/m.current == {}
-	test/m.snapshot == {}
-	test/m.duration == 0
+	test/m.units == {}
+	test/m.counts == {}
+	test/m.totals == ({}, {})
+	test/m.time == 0
 
 def test_Metrics_clear(test):
 	m = module.Metrics()
 	m.update('k', 1)
 	m.commit(1)
 	test/m.total('k') == 1
-	test/m.duration == 1
+	test/m.time == 1
 
 	m.clear()
-	test/m.duration == 0
+	test/m.time == 0
 	test/m.history == []
-	test/m.snapshot == {}
-	test/m.current == {}
+	test/m.totals == ({}, {})
+	test/m.units == {}
+	test/m.counts == {}
 
 def test_Metrics_commit(test):
 	m = module.Metrics()
 	test/len(m.history) == 0
 
 	m.commit(0)
-	test/m.duration == 0
+	test/m.time == 0
 	test/len(m.history) == 1
 
 	m.commit(1)
-	test/m.duration == 1
+	test/m.time == 1
 	test/len(m.history) == 2
 	m.commit(1)
-	test/m.duration == 2
+	test/m.time == 2
 	test/len(m.history) == 3
 
 def test_Metrics_total(test):
@@ -45,17 +47,17 @@ def test_Metrics_total(test):
 
 	# Counted prior to commit().
 	test/m.total('k') == 1
-	test/m.duration == 0
+	test/m.time == 0
 
 	m.commit(1)
 	test/m.total('k') == 1
-	test/m.duration == 1
+	test/m.time == 1
 
 def test_Metrics_rate(test):
 	m = module.Metrics()
 	m.update('k', 1)
 	test/ZeroDivisionError ^ (lambda: m.rate('k'))
-	test/m.duration == 0
+	test/m.time == 0
 
 	m.commit(2)
 	r = m.rate('k')
@@ -65,7 +67,7 @@ def test_Metrics_recent(test):
 	m = module.Metrics()
 	m.update('k', 1)
 	test/m.recent('k') == 0 # Not committed.
-	test/m.duration == 0
+	test/m.time == 0
 
 	m.commit(2)
 	test/m.recent('k') == 1

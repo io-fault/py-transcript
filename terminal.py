@@ -34,30 +34,31 @@ class Metrics(object):
 		self.clear()
 
 	def clear(self):
-		self.duration = 0 # Implied time field.
-		self.current = collections.defaultdict(int)
-		self.snapshot = collections.defaultdict(int)
 		self.history = []
+		self.time = 0 # Implied time field.
+		self.units = collections.defaultdict(int)
+		self.counts = collections.defaultdict(int)
+		self.totals = (collections.defaultdict(int), collections.defaultdict(int))
 
 	def recent(self, field:str):
 		"""
 		# Retrieve the value of the field as it's found within the history.
 		"""
 		i = 0
-		for d, x in self.history:
-			i += x[field]
+		for d, units, counts in self.history:
+			i += units[field]
 		return i
 
 	def rate(self, field:str):
 		"""
 		# The rate of the field with respect to the recent history.
 		# The overall rate can be calculated with
-		# (syntax/python)`m.total(field0) / m.duration`.
+		# (syntax/python)`m.total(field0) / m.time`.
 		"""
 		i = 0
 		t = 0
-		for d, x in self.history:
-			i += x.get(field, 0)
+		for d, units, counts in self.history:
+			i += units.get(field, 0)
 			t += d
 
 		return i / t
@@ -66,37 +67,40 @@ class Metrics(object):
 		"""
 		# The overall rate.
 		"""
-		return self.snapshot[field] / self.duration
+		return self.totals[0][field] / self.time
 
 	def average(self, field:str):
 		"""
 		# The average of the field within the history.
 		"""
-		return sum(x.get(field, 0) for (d, x) in self.history) / len(self.history)
+		return sum(units.get(field, 0) for (d, units, counts) in self.history) / len(self.history)
 
 	def total(self, field:str):
 		"""
-		# The total of the field according to the snapshot.
+		# The total of the field.
 		"""
-		return self.snapshot[field]
+		return self.totals[0][field]
 
 	def update(self, key, value, count=1):
 		"""
-		# Update the total and the current.
+		# Update the total and the working units.
 		"""
-		self.current[key] += value
-		self.snapshot[key] += value
+		self.units[key] += value
+		self.counts[key] += count
+		self.totals[0][key] += value
+		self.totals[1][key] += count
 
 	def changes(self):
 		"""
-		# Create iterator reporting the fields with changes in current.
+		# Create iterator reporting the fields with changes in units.
 		"""
-		return self.current.keys()
+		return self.units.keys()
 
 	def commit(self, time):
-		self.history.append((time, self.current))
-		self.duration += time
-		self.current = collections.defaultdict(int)
+		self.history.append((time, self.units, self.counts))
+		self.time += time
+		self.units = collections.defaultdict(int)
+		self.counts = collections.defaultdict(int)
 
 	def trim(self, window=8):
 		"""
@@ -105,8 +109,8 @@ class Metrics(object):
 		t = 0
 		i = None
 		data = None
-		for (d, data), i in zip(reversed(self.history), range(len(self.history) - 1, -1, -1)):
-			assert data is self.history[i][1]
+		for (d, units, counts), i in zip(reversed(self.history), range(len(self.history) - 1, -1, -1)):
+			assert units is self.history[i][1]
 
 			t += d
 			if t > window:
@@ -121,11 +125,12 @@ class Metrics(object):
 
 		f = time_remains / d
 		del self.history[:i]
-		for k, v in data.items():
-			data[k] *= f
+		for k, v in units.items():
+			units[k] *= f
+			counts[k] *= f
 
-		assert self.history[0][1] is data
-		self.history[0] = (time_remains, data)
+		assert self.history[0][1] is units
+		self.history[0] = (time_remains, units, counts)
 
 class Layout(object):
 	"""
@@ -309,8 +314,8 @@ class Monitor(object):
 		# Select a filter for reading the field.
 		"""
 
-		current = self.view.get(field, 'total')
-		next = self.view_state_loop[current]
+		units = self.view.get(field, 'total')
+		next = self.view_state_loop[units]
 		self.view[field] = next
 
 	def prefix(self, *words):
@@ -337,7 +342,7 @@ class Monitor(object):
 		metrics = self.metrics
 
 		label = render('Label', "duration")
-		value = render('duration', metrics.duration)
+		value = render('duration', metrics.time)
 		yield label, value, 40, 8 - value.cellcount()
 
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
@@ -359,7 +364,7 @@ class Monitor(object):
 		metrics = self.metrics
 
 		label = render('Label', "duration")
-		value = render('duration', metrics.duration)
+		value = render('duration', metrics.time)
 		yield label, value, 40, 8 - value.cellcount()
 
 		for k, (fpad, position, cells, lc) in ((k, self._pcache[k]) for k in fields):
