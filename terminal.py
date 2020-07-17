@@ -367,7 +367,8 @@ class Monitor(object):
 		value = render('duration', metrics.time)
 		yield label, value, 40, 8 - value.cellcount()
 
-		for k, (fpad, position, cells, lc) in ((k, self._pcache[k]) for k in fields):
+		fields = ((k, self._pcache[k]) for k in fields if k in self._pcache)
+		for k, (fpad, position, cells, lc) in fields:
 			readv = getattr(metrics, self.view.get(k, 'total'))
 			try:
 				value = render(k, readv(k))
@@ -514,6 +515,43 @@ class Control(object):
 		"""
 		self._buffer.append(monitor.context.clear())
 
+	def configure(self, lines:int):
+		"""
+		# Configure the scrolling region allocating &lines at
+		# the top or bottom of the screen for status display.
+
+		# This method should be called after window changes of any type.
+		# The window size is refreshed from the device; monitors should
+		# also be reallocated so that their Context positions can be adjusted.
+		"""
+		if not lines:
+			raise ValueError("line allocation must be non-zero")
+
+		ctx = self.context
+		scr = self.screen
+		hv = self.device.get_window_dimensions()
+		scr.context_set_dimensions(hv)
+
+		if lines > 0:
+			t = 0
+			v = hv[1] - lines
+
+			ctx.context_set_position((0, v))
+			ctx.context_set_dimensions((hv[0], lines))
+			init = (b'\n' * lines) + scr.seek_vertical_relative(-lines)
+		else:
+			# Allocate top.
+			t = -lines
+			v = hv[1]
+
+			ctx.context_set_position((0, 0))
+			ctx.context_set_dimensions((hv[0], -lines))
+			init = scr.store_cursor_location() + ctx.clear() + scr.restore_cursor_location()
+
+		init += scr.open_scrolling_region(t, v-1)
+		self._write(init)
+		return self
+
 def setup(lines:int, atexit=b'', type='prepared',
 		destruct=True,
 		Context=matrix.Context,
@@ -538,30 +576,7 @@ def setup(lines:int, atexit=b'', type='prepared',
 		destruct=destruct,
 	)
 
-	hv = device.get_window_dimensions()
-	screen.context_set_dimensions(hv)
-
-	ctx = Context(screen.terminal_type)
-	if lines > 0:
-		t = 0
-		v = hv[1] - lines
-
-		ctx.context_set_position((0, v))
-		ctx.context_set_dimensions((hv[0], lines))
-		init = (b'\n' * lines) + screen.seek_vertical_relative(-lines)
-	else:
-		# Allocate top.
-		t = -lines
-		v = hv[1]
-
-		ctx.context_set_position((0, 0))
-		ctx.context_set_dimensions((hv[0], -lines))
-		init = screen.store_cursor_location() + ctx.clear() + screen.restore_cursor_location()
-
-	init += screen.open_scrolling_region(t, v-1)
-	ctl = Control(device, screen, ctx)
-	ctl._write(init)
-	return ctl
+	return Control(device, screen, Context(screen.terminal_type)).configure(lines)
 
 if __name__ == '__main__':
 	import time
