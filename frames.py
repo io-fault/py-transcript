@@ -88,12 +88,6 @@ class Log(object):
 		self._count = 0
 		self._flush()
 
-	def _init(self):
-		from ..status import frames
-		msg = frames.tty_notation_1_message
-		self._send(self._pack((None, msg)).encode(self.encoding))
-		self.transaction()
-
 	def emit(self, channel, message):
 		"""
 		# Send a &message using the given &channel identifier.
