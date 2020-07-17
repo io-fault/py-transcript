@@ -77,15 +77,15 @@ def r_label(value):
 
 # Display order.
 _order = [
-	('usage', 8),
 	('executing', 8),
+	('usage', 8),
 	('failed', 8),
 	('finished', 8),
 ]
 
 _formats = [
-	('u', "usage", 'violet', r_usage),
 	('x', "executing", 'orange', tools.partial(r_count, 'executing')),
+	('u', "usage", 'violet', r_usage),
 	('f', "failed", 'red', tools.partial(r_count, 'failed')),
 	('d', "finished", 'green', tools.partial(r_count, 'finished')),
 ]
@@ -179,6 +179,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 	from ..system import execution
 	from ..time.sysclock import elapsed as time
 	from ..status import frames
+	from ..status.types import Report
+	from .frames import protocol as metrics_protocol
 
 	unpack, pack = frames.stdio()
 	hostname = query.hostname()
@@ -281,38 +283,30 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					evtype = msg.msg_event.symbol
 					xacts[channel].append(msg)
 
+					data = msg.msg_parameters['data']
+					if isinstance(data, Report) and data.event.protocol == metrics_protocol:
+						# Metrics update.
+						metrics.update('duration', data.r_parameters['time'], 1)
+						mtotals.update('duration', data.r_parameters['time'], 1)
+
+						fnames = data.r_parameters['fields']
+						funits = data.r_parameters['units']
+						fcounts = data.r_parameters['counts']
+						for n, u, c in zip(fnames, funits, fcounts):
+							metrics.update(n, u, c)
+							mtotals.update(n, u, c)
+
 					if evtype == 'transaction-stopped':
-						metrics.update('executing', -1)
-						mtotals.update('executing', -1)
+						metrics.update('executing', -1, 0)
+						mtotals.update('executing', -1, 0)
 
 						try:
 							start, *messages, stop = xacts.pop(channel)
 						except ValueError:
 							pass
-						else:
-							start_data = start.msg_parameters['data']
-							stop_data = stop.msg_parameters['data']
-
-							u = stop_data.get_parameter('user')
-							u += stop_data.get_parameter('system')
-
-							start_time = start_data.get_parameter('time-offset')
-							stop_time = stop_data.get_parameter('time-offset')
-							#duration = (stop_time - start_time)
-							metrics.update('usage', u)
-							mtotals.update('usage', u)
-
-							exit_code = stop_data.get_parameter('status')
-							if exit_code != 0:
-								metrics.update('failed', 1)
-								mtotals.update('failed', 1)
-								#trap(output, xcontext, channel, stop_data, start_data, messages)
-							else:
-								metrics.update('finished', 1)
-								mtotals.update('finished', 1)
 					elif evtype == 'transaction-started':
-						metrics.update('executing', 1)
-						mtotals.update('executing', 1)
+						metrics.update('executing', 1, 0)
+						mtotals.update('executing', 1, 0)
 
 			# Calculate change in time for Metrics.commit.
 			next_time = time()
@@ -349,4 +343,3 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 				pass
 			else:
 				exit_status = execution.reap(status['pid'], options=0)
-import sys
