@@ -272,6 +272,11 @@ class Monitor(object):
 		'rate': 'overall',
 		'overall': 'total',
 	}
+	unit_type_separators = {
+		'total': ' ',
+		'rate': '/',
+		'overall': '^',
+	}
 
 	def __init__(self, theme:Theme, layout:Layout, context:matrix.Context):
 		self.theme = theme # Style sets and value rendering methods.
@@ -319,6 +324,11 @@ class Monitor(object):
 		next = self.view_state_loop[units]
 		self.view[field] = next
 
+	def set_field_read_type(self, field, units):
+		if units not in self.view_state_loop:
+			raise ValueError(units)
+		self.view[field] = units
+
 	def prefix(self, *words):
 		"""
 		# Attach a constant phrase to the beginning of the monitor.
@@ -344,13 +354,15 @@ class Monitor(object):
 
 		label = render('Label', "duration")
 		value = render('duration', metrics.time)
-		yield label, value, 40, 8 - value.cellcount()
+		yield 'total', label, value, 40, 8 - value.cellcount()
 
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
-			readv = getattr(metrics, self.view.get(k, 'total'))
+			utype = self.view.get(k, 'total')
+			readv = getattr(metrics, utype)
 			try:
 				v = readv(k)
 			except ZeroDivisionError:
+				utype = 'total'
 				v = metrics.total(k)
 
 			if filter(v):
@@ -361,7 +373,7 @@ class Monitor(object):
 			ncells = value.cellcount()
 			label = render('Label', lstr)
 
-			yield label, value, position + offset, (cells - ncells)
+			yield utype, label, value, position + offset, (cells - ncells)
 
 	def delta(self, fields, offset=58):
 		render = self.theme.render
@@ -370,33 +382,36 @@ class Monitor(object):
 
 		label = render('Label', "duration")
 		value = render('duration', metrics.time)
-		yield label, value, 40, 8 - value.cellcount()
+		yield 'total', label, value, 40, 8 - value.cellcount()
 
 		fields = ((k, self._pcache[k]) for k in fields if k in self._pcache)
 		for k, (fpad, position, cells, lc) in fields:
-			readv = getattr(metrics, self.view.get(k, 'total'))
+			utype = self.view.get(k, 'total')
+			readv = getattr(metrics, utype)
 			try:
-				value = render(k, readv(k))
+				v = readv(k)
 			except ZeroDivisionError:
-				value = render(k, metrics.total(k))
+				utype = 'total'
+				v = metrics.total(k)
+			value = render(k, v)
 
 			lstr = labels.get(k, k)
 			ncells = value.cellcount()
 			label = render('Label', lstr)
 
-			yield label, value, position + offset, (cells - ncells)
+			yield utype, label, value, position + offset, (cells - ncells)
 
 	def phrase(self, filter=(lambda x: False)) -> matrix.Context.Phrase:
 		"""
 		# The monitor's image as a single phrase instance.
 		"""
 		phrases = list(self.render(filter=filter))
-		labels = (x[0] for x in phrases)
-		values = (x[1] for x in phrases)
+		utypes = (x[0] for x in phrases)
+		labels = (x[1] for x in phrases)
+		values = (x[2] for x in phrases)
 
-		n = (lambda x: self.theme.render('Label', x))
-		sep = (n(' '))
-		lseps = (sep for i in range(len(phrases)))
+		n = (lambda x: self.theme.render('Label-Separator', x))
+		lseps = (n(self.unit_type_separators[x]) for x in utypes)
 		fseps = map(n, self.layout.separators(len(phrases)))
 
 		return tools.interlace(values, lseps, labels, fseps)
@@ -483,11 +498,12 @@ class Control(object):
 		"""
 		context = monitor.context
 
-		for label, ph, position, pad in fields:
+		for utype, label, ph, position, pad in fields:
+			lsep = monitor.theme.render('Label-Separator', monitor.unit_type_separators[utype])
 			i = itertools.chain.from_iterable([
 				(context.seek((position+offset, 0)), b' ' * pad),
 				context.render(ph),
-				(b' ',),
+				context.render(lsep),
 				context.render(label) if label else (),
 			])
 			self._buffer.append(b''.join(i))
@@ -648,6 +664,8 @@ def form(order, formats):
 	t = Theme(matrix.Type.normal_render_parameters)
 	t.implement('duration', Theme.r_duration)
 	t.implement('title', r_title)
+
+	t.define('Label-Separator', textcolor=palette.colors['background-adjacent'])
 	t.define('duration', textcolor=palette.colors['white'])
 	t.define('unit-label', textcolor=palette.colors['gray'])
 	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
