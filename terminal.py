@@ -272,6 +272,7 @@ class Monitor(object):
 		'rate': 'overall',
 		'overall': 'total',
 	}
+
 	unit_type_separators = {
 		'total': ' ',
 		'rate': '/',
@@ -317,7 +318,7 @@ class Monitor(object):
 
 	def cycle(self, field):
 		"""
-		# Select a filter for reading the field.
+		# Select the next read type for the given field using the &view_state_loop.
 		"""
 
 		units = self.view.get(field, 'total')
@@ -656,11 +657,11 @@ def r_title(value):
 	t = str(category) + '[' + ']['.join(dimensions) + ']'
 	return [('plain', t)]
 
-def form(order, formats):
+def form(module):
 	"""
 	# Construct a &Layout and &Theme from the provided order and formatting structures.
 	"""
-	l = Layout(order)
+	l = Layout(module.order)
 	t = Theme(matrix.Type.normal_render_parameters)
 	t.implement('duration', Theme.r_duration)
 	t.implement('title', r_title)
@@ -672,15 +673,15 @@ def form(order, formats):
 	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
 	t.define('data-rate', textcolor=palette.colors['gray'])
 
-	for (k, width), (keycode, label, color, fn) in zip(order, formats):
+	for (k, width), (keycode, label, color, fn) in zip(module.order, module.formats):
 		if fn is not None:
 			t.implement(k, fn)
 		t.define(k, textcolor=palette.colors[color])
 		l.label(k, label or None)
 
-	return t, l
+	return t, l, getattr(module, 'types', {})
 
-def aggregate(control:Control, layout:Layout, theme:Theme, lanes=1, width=80):
+def aggregate(control:Control, module, lanes=1, width=80):
 	"""
 	# Construct &Monitor instnaces allocated using &control for
 	# displaying the aggregate of the dimension allocations.
@@ -688,11 +689,17 @@ def aggregate(control:Control, layout:Layout, theme:Theme, lanes=1, width=80):
 	# Returns a sequence of &Monitor instances for the dimensions
 	# and a single Monitor for the aggregation.
 	"""
+	t, l, types = form(module)
 	lanes_seq = [
-		Monitor(theme, layout, control.allocate((0, i), width=width))
+		Monitor(t, l, control.allocate((0, i), width=width))
 		for i in range(lanes)
 	]
-	m = Monitor(theme, layout, control.allocate((0, lanes), width=width))
+	m = Monitor(t, l, control.allocate((0, lanes), width=width))
+
+	for k, v in types.items():
+		m.set_field_read_type(k, v)
+		for x in lanes_seq:
+			x.set_field_read_type(k, v)
 
 	return lanes_seq, m
 

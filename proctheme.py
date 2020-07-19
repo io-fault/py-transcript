@@ -19,3 +19,7 @@ formats = [
 	('f', "failed", 'red', tools.partial(terminal.r_count, 'failed')),
 	('p', "processed", 'green', tools.partial(terminal.r_count, 'processed')),
 ]
+
+types = {
+	'usage': 'rate',
+}
