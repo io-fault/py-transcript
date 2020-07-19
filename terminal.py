@@ -337,7 +337,7 @@ class Monitor(object):
 		"""
 		self._title = (title, dimensions)
 
-	def render(self, offset=58):
+	def render(self, filter=(lambda x: False), offset=58):
 		render = self.theme.render
 		layout = self.layout
 		metrics = self.metrics
@@ -349,9 +349,13 @@ class Monitor(object):
 		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
 			readv = getattr(metrics, self.view.get(k, 'total'))
 			try:
-				value = render(k, readv(k))
+				v = readv(k)
 			except ZeroDivisionError:
-				value = render(k, metrics.total(k))
+				v = metrics.total(k)
+
+			if filter(v):
+				continue
+			value = render(k, v)
 
 			lstr = layout.labels[k]
 			ncells = value.cellcount()
@@ -382,11 +386,11 @@ class Monitor(object):
 
 			yield label, value, position + offset, (cells - ncells)
 
-	def phrase(self) -> matrix.Context.Phrase:
+	def phrase(self, filter=(lambda x: False)) -> matrix.Context.Phrase:
 		"""
 		# The monitor's image as a single phrase instance.
 		"""
-		phrases = list(self.render())
+		phrases = list(self.render(filter=filter))
 		labels = (x[0] for x in phrases)
 		values = (x[1] for x in phrases)
 
@@ -401,7 +405,7 @@ class Monitor(object):
 		"""
 		# A bytes form of the &Monitor.phrase. (The image without cursor movement)
 		"""
-		l = list(self.phrase())
+		l = list(self.phrase(filter=(lambda x: x in {0,0.0,"0"})))
 		cells = sum(x.cellcount() for x in l)
 		rph = map(self.context.render, l)
 		return cells, b''.join(itertools.chain.from_iterable(rph)).decode('utf-8')
