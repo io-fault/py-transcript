@@ -9,6 +9,7 @@ import collections
 
 from ..context import tools
 from ..terminal import matrix
+from ..terminal import palette
 from ..time import sysclock
 
 def duration_repr(seconds) -> typing.Tuple[float, str]:
@@ -507,13 +508,20 @@ class Control(object):
 		else:
 			del self._buffer[:l]
 
-	def clear(self, monitor):
+	def erase(self, monitor):
 		"""
 		# Clear the area used by the monitor's context.
 
 		# Operation is buffered and must flushed to be effective.
 		"""
 		self._buffer.append(monitor.context.clear())
+
+	def clear(self):
+		"""
+		# Clear the entire configured area for status.
+		# Used when transitioning monitor configurations.
+		"""
+		self._buffer.append(self.context.clear())
 
 	def configure(self, lines:int):
 		"""
@@ -552,7 +560,7 @@ class Control(object):
 		self._write(init)
 		return self
 
-def setup(lines:int, atexit=b'', type='prepared',
+def setup(atexit=b'', type='prepared',
 		destruct=True,
 		Context=matrix.Context,
 	) -> Control:
@@ -565,9 +573,6 @@ def setup(lines:int, atexit=b'', type='prepared',
 	# not supported by this interface as &Control only manages one
 	# &matrix.Context.
 	"""
-	if not lines:
-		raise ValueError("line allocation must be non-zero")
-
 	from ..terminal import control
 	screen = matrix.Screen()
 
@@ -576,7 +581,98 @@ def setup(lines:int, atexit=b'', type='prepared',
 		destruct=destruct,
 	)
 
-	return Control(device, screen, Context(screen.terminal_type)).configure(lines)
+	return Control(device, screen, Context(screen.terminal_type))
+
+_metric_units = [
+	('', '', 0),
+	('kilo', 'k', 3),
+	('mega', 'M', 6),
+	('giga', 'G', 9),
+	('tera', 'T', 12),
+	('peta', 'P', 15),
+	('exa', 'E', 18),
+	('zetta', 'Z', 21),
+	('yotta', 'Y', 24),
+]
+
+def _precision(count):
+	index = 0
+	for pd in _metric_units:
+		count //= (10**3)
+		if count < 1000:
+			return pd
+	return pd
+
+def _strings(value, formatting="{:.1f}".format):
+	suffix, power = _precision(value)[1:]
+	r = value / (10**power)
+	return (formatting(r), suffix)
+
+def r_count(field, value, isinstance=isinstance):
+	"""
+	# Render method for counts providing compression using metric units.
+	"""
+
+	if isinstance(value, str) or (value < 100000 and not isinstance(value, float)):
+		n = str(value)
+		unit = ''
+	else:
+		n, unit = _strings(value)
+
+	if n == "0":
+		# By default, don't color zeros.
+		field = 'plain'
+
+	return [
+		(field, n),
+		('unit-label', unit)
+	]
+
+def r_title(value):
+	"""
+	# Render method for monitor titles.
+	"""
+	category, dimensions = value
+	t = str(category) + '[' + ']['.join(dimensions) + ']'
+	return [('plain', t)]
+
+def form(order, formats):
+	"""
+	# Construct a &Layout and &Theme from the provided order and formatting structures.
+	"""
+	l = Layout(order)
+	t = Theme(matrix.Type.normal_render_parameters)
+	t.implement('duration', Theme.r_duration)
+	t.implement('title', r_title)
+	t.define('duration', textcolor=palette.colors['white'])
+	t.define('unit-label', textcolor=palette.colors['gray'])
+	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
+	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
+	t.define('data-rate', textcolor=palette.colors['gray'])
+
+	for (k, width), (keycode, label, color, fn) in zip(order, formats):
+		if fn is not None:
+			t.implement(k, fn)
+		t.define(k, textcolor=palette.colors[color])
+		l.label(k, label or None)
+
+	return t, l
+
+def aggregate(control:Control, layout:Layout, theme:Theme, lanes=1, width=80):
+	"""
+	# Construct &Monitor instnaces allocated using &control for
+	# displaying the aggregate of the dimension allocations.
+
+	# Returns a sequence of &Monitor instances for the dimensions
+	# and a single Monitor for the aggregation.
+	"""
+	lanes_seq = [
+		Monitor(theme, layout, control.allocate((0, i), width=width))
+		for i in range(lanes)
+	]
+	m = Monitor(theme, layout, control.allocate((0, lanes), width=width))
+
+	return lanes_seq, m
 
 if __name__ == '__main__':
 	import time

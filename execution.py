@@ -4,126 +4,16 @@
 import os
 import collections
 import typing
+import signal
 
 from ..context import tools
-from ..terminal import palette
-from . import terminal
+from ..time.sysclock import elapsed as time
+from ..system import execution
+from ..status.frames import stdio
+from ..status.types import Report
 
-def title(category, dimensions):
-	"""
-	# Form a title string from an execution plan's category and dimensions.
-	"""
-	return str(category) + '[' + ']['.join(dimensions) + ']'
-
-def r_title(value):
-	c, d = value
-	return [('plain', title(c, d))]
-
-_metric_units = [
-	('', '', 0),
-	('kilo', 'k', 3),
-	('mega', 'M', 6),
-	('giga', 'G', 9),
-	('tera', 'T', 12),
-	('peta', 'P', 15),
-	('exa', 'E', 18),
-	('zetta', 'Z', 21),
-	('yotta', 'Y', 24),
-]
-
-def _precision(count):
-	index = 0
-	for pd in _metric_units:
-		count //= (10**3)
-		if count < 1000:
-			return pd
-	return pd
-
-def _strings(value, formatting="{:.1f}".format):
-	suffix, power = _precision(value)[1:]
-	r = value / (10**power)
-	return (formatting(r), suffix)
-
-def r_count(field, value):
-	if isinstance(value, str) or (value < 100000 and not isinstance(value, float)):
-		n = str(value)
-		unit = ''
-	else:
-		n, unit = _strings(value)
-
-	return [
-		(field, n),
-		('unit-label', unit)
-	]
-
-def r_usage(value, color='blue'):
-	yield from r_count('usage', value or 0.0)
-	return
-
-	for count in value[:-1]:
-		yield from r_count('usage', count)
-		yield ('plain', '/')
-
-	count = value[-1]
-	yield from r_count('usage', count)
-
-def r_label(value):
-	start, keycode, end = value
-	return [
-		('Label', start),
-		('Label-Emphasis', keycode),
-		('Label', end),
-	]
-
-# Display order.
-_order = [
-	('executing', 8),
-	('usage', 8),
-	('failed', 8),
-	('finished', 8),
-]
-
-_formats = [
-	('x', "executing", 'orange', tools.partial(r_count, 'executing')),
-	('u', "usage", 'violet', r_usage),
-	('f', "failed", 'red', tools.partial(r_count, 'failed')),
-	('d', "finished", 'green', tools.partial(r_count, 'finished')),
-]
-
-def configure(order, formats):
-	l = terminal.Layout(order)
-	t = terminal.Theme(terminal.matrix.Type.normal_render_parameters)
-	t.implement('duration', terminal.Theme.r_duration)
-	t.implement('title', r_title)
-	t.define('duration', textcolor=palette.colors['white'])
-	t.define('unit-label', textcolor=palette.colors['gray'])
-	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
-	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
-	t.define('data-rate', textcolor=palette.colors['gray'])
-
-	for (k, width), (keycode, label, color, fn) in zip(order, formats):
-		if fn is not None:
-			t.implement(k, fn)
-		t.define(k, textcolor=palette.colors[color])
-		l.label(k, label or None)
-
-	return t, l
-
-ATheme, ALayout = configure(_order, _formats)
-
-def aggregate(lanes=1, width=80, layout=ALayout, theme=ATheme):
-	"""
-	# Construct a monitor controller for execution aggregation.
-	"""
-	stctl = terminal.setup(lanes+1)
-
-	lanes_seq = [
-		terminal.Monitor(theme, layout, stctl.allocate((0, i), width=width))
-		for i in range(lanes)
-	]
-	totals = terminal.Monitor(theme, layout, stctl.allocate((0, lanes), width=width))
-
-	return stctl, lanes_seq, totals
+from . import io
+from .frames import protocol as metrics_protocol
 
 def transaction(synopsis, duration):
 	"""
@@ -173,17 +63,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 	# Commands are executed simultaneously so long as a monitor is available to display
 	# their status.
 	"""
-	import signal
-	from . import io
-	from ..system import query
-	from ..system import execution
-	from ..time.sysclock import elapsed as time
-	from ..status import frames
-	from ..status.types import Report
-	from .frames import protocol as metrics_protocol
 
-	unpack, pack = frames.stdio()
-	hostname = query.hostname()
+	unpack, pack = stdio()
 	total_messages = 0
 	message_count = 0
 	nmonitors = len(monitors)
@@ -220,13 +101,13 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					next_channel = _launch(status)
 					if next_channel is None:
 						queue.finish(status['source'])
-						stctl.clear(monitor)
+						stctl.erase(monitor)
 						available.append(lid)
 						continue
 
 					monitor.title(next_channel[1], *next_channel[2])
 					ioa.connect(lid, next_channel[0])
-					stctl.clear(monitor)
+					stctl.erase(monitor)
 					stctl.frame(monitor)
 					stctl.update(monitor, monitor.render())
 
@@ -259,7 +140,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 
 					if next_channel is not None:
 						ioa.connect(lid, next_channel[0])
-						stctl.clear(monitor)
+						stctl.erase(monitor)
 						monitor.title(next_channel[1], *next_channel[2])
 						stctl.frame(monitor)
 						stctl.update(monitor, monitor.render())
@@ -273,7 +154,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					stctl.frame(summary)
 					stctl.update(summary, summary.render())
 					status.clear()
-					stctl.clear(monitor)
+					stctl.erase(monitor)
 					continue
 
 				nframes = len(sframes)
