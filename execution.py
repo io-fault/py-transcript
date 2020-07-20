@@ -154,7 +154,6 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					stctl.frame(summary)
 					stctl.update(summary, summary.render())
 					status.clear()
-					stctl.erase(monitor)
 					continue
 
 				nframes = len(sframes)
@@ -206,7 +205,6 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 			tdeltas = set(mtotals.changes())
 			mtotals.commit(elapsed)
 			mtotals.trim(window)
-			#print(mtotals.recent('usage'), file=sys.stderr)
 
 			summary.title(title, '/'.join(map(str, queue.status())))
 			stctl.frame(summary)
