@@ -117,6 +117,31 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 						# Queue has nothing and statusd is empty? EOF.
 						processing = False
 						continue
+					elif available:
+						# End of queue and still running.
+						# Check existing jobs for further work.
+						sources = list(statusd)
+						for lid in sources:
+							while available:
+								status = dict(statusd[lid])
+								next_channel = _launch(status)
+								if next_channel is None:
+									# continues for-loop
+									break
+								else:
+									xlid = available.popleft()
+									status['transactions'] = collections.defaultdict(list)
+									statusd[xlid] = status
+									monitor = monitors[xlid]
+
+									monitor.title(next_channel[1], *next_channel[2])
+									ioa.connect(xlid, next_channel[0])
+									stctl.erase(monitor)
+									stctl.frame(monitor)
+									stctl.update(monitor, monitor.render())
+							else:
+								# No more availability, break out of for-loop.
+								break
 
 			# Cycle through sources, flush when complete.
 			for lid, sframes in ioa:
