@@ -123,7 +123,6 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 					next_channel = _launch(status)
 					if next_channel is None:
 						queue.finish(status['source'])
-						stctl.erase(monitor)
 						available.append(lid)
 						continue
 
@@ -131,7 +130,6 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 					ioa.connect(lid, next_channel[0])
 					stctl.install(monitor)
 
-				stctl.flush()
 				if queue.terminal():
 					if not statusd:
 						# Queue has nothing and statusd is empty? EOF.
@@ -160,6 +158,10 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 							else:
 								# No more availability, break out of for-loop.
 								break
+
+			# Located before possible waits in &ioa.__iter__,
+			# but not directly after to allow seamless transitions.
+			stctl.flush()
 
 			# Cycle through sources, flush when complete.
 			for lid, sframes in ioa:
@@ -231,7 +233,7 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 
 			# Calculate change in time for Metrics.commit.
 			next_time = time()
-			# millisecond precision
+			# millisecond precision in Monitor.metrics.
 			elapsed = (next_time.decrease(last).select('millisecond') or 1)
 			elapsed /= 1000 # convert to float seconds
 			last = next_time
@@ -251,10 +253,10 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 			summary.title(title, '/'.join(map(str, queue.status())))
 			stctl.frame(summary)
 			stctl.update(summary, summary.delta(tdeltas))
-			stctl.flush()
 		else:
 			pass
 	finally:
+		stctl.flush()
 		ioa.__exit__(None, None, None) # Exception has the same effect.
 		for lid in statusd:
 			try:
