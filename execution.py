@@ -5,6 +5,7 @@ import os
 import collections
 import typing
 import signal
+from dataclasses import dataclass
 
 from ..context import tools
 from ..time.sysclock import elapsed as time
@@ -14,6 +15,34 @@ from ..status.types import Report
 
 from . import io
 from .frames import protocol as metrics_protocol
+
+@dataclass
+class Traps:
+	"""
+	# Callback set for &dispatch.
+
+	# [ Properties ]
+	# /eox/
+		# End of transaction callback.
+		# Called whenever a transaction is closed by a job.
+	# /eop/
+		# End of process callback.
+		# Called whenever a process of a job exits.
+	# /eog/
+		# End of group callback.
+	"""
+
+	@staticmethod
+	def nop(*args):
+		pass
+
+	@classmethod
+	def construct(Class, eox=nop, eop=nop, eog=nop):
+		return Class(eox, eop, eog)
+
+	eox: typing.Callable[[], None] = None
+	eop: typing.Callable[[], None] = None
+	eog: typing.Callable[[], None] = None
 
 def transaction(synopsis, duration):
 	"""
@@ -48,14 +77,7 @@ def _launch(status, stderr=2, stdin=0):
 
 	return (rfd, category, dimensions)
 
-def _transmit(pack, output, stctl, monitor, channel):
-	m = monitor.metrics
-	cells, mss = monitor.snapshot()
-	synop = monitor._title[0] + ': ' + mss + stctl.context.reset_text().decode('utf-8')
-
-	output.write(pack((channel, transaction(synop, m.time))))
-
-def dispatch(error, output, control, monitors, summary, title, queue, trap, plan, window=8, range=range, next=next):
+def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, range=range, next=next):
 	"""
 	# Execute a sequence of system commands while displaying their status
 	# according to the transaction messages they emit to standard out.
@@ -107,9 +129,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 
 					monitor.title(next_channel[1], *next_channel[2])
 					ioa.connect(lid, next_channel[0])
-					stctl.erase(monitor)
-					stctl.frame(monitor)
-					stctl.update(monitor, monitor.render())
+					stctl.install(monitor)
 
 				stctl.flush()
 				if queue.terminal():
@@ -136,9 +156,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 
 									monitor.title(next_channel[1], *next_channel[2])
 									ioa.connect(xlid, next_channel[0])
-									stctl.erase(monitor)
-									stctl.frame(monitor)
-									stctl.update(monitor, monitor.render())
+									stctl.install(monitor)
 							else:
 								# No more availability, break out of for-loop.
 								break
@@ -157,18 +175,15 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					exit_status = execution.reap(pid, options=0)
 
 					# Send final snapshot to output. (stdout)
-					_transmit(pack, output, stctl, monitor, status['channel'])
-					output.flush()
+					traps.eop(pack, monitor, status['channel'], pid, exit_status)
 
 					next_channel = _launch(status)
 					monitor.metrics.clear()
 
 					if next_channel is not None:
 						ioa.connect(lid, next_channel[0])
-						stctl.erase(monitor)
 						monitor.title(next_channel[1], *next_channel[2])
-						stctl.frame(monitor)
-						stctl.update(monitor, monitor.render())
+						stctl.install(monitor)
 						continue
 
 					queue.finish(status['source'])
@@ -176,8 +191,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 					available.append(lid)
 
 					summary.title(title, '/'.join(map(str, queue.status())))
-					stctl.frame(summary)
-					stctl.update(summary, summary.render())
+					stctl.install(summary)
 					status.clear()
 					continue
 
@@ -209,6 +223,8 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 							start, *messages, stop = xacts.pop(channel)
 						except ValueError:
 							pass
+						else:
+							traps.eox(monitor, stop, start, messages, status['channel'])
 					elif evtype == 'transaction-started':
 						metrics.update('executing', 1, 0)
 						mtotals.update('executing', 1, 0)
@@ -220,6 +236,7 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 			elapsed /= 1000 # convert to float seconds
 			last = next_time
 
+			# Update duration and any other altered fields.
 			for m in monitors:
 				mm = m.metrics
 				deltas = set(mm.changes())
@@ -239,7 +256,6 @@ def dispatch(error, output, control, monitors, summary, title, queue, trap, plan
 			pass
 	finally:
 		ioa.__exit__(None, None, None) # Exception has the same effect.
-		error.flush()
 		for lid in statusd:
 			try:
 				os.killpg(statusd[lid]['pid'], signal.SIGKILL)
