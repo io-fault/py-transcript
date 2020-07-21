@@ -426,6 +426,14 @@ class Monitor(object):
 		rph = map(self.context.render, l)
 		return cells, b''.join(itertools.chain.from_iterable(rph)).decode('utf-8')
 
+	def synopsis(self) -> str:
+		"""
+		# Construct a status frame synopsis using the monitor's configuration and metrics.
+		"""
+		m = self.metrics
+		cells, mss = self.snapshot()
+		return self._title[0] + ': ' + mss + self.context.reset_text().decode('utf-8')
+
 class Control(object):
 	"""
 	# Root monitor control; manages the device interface, screen, and status context.
@@ -455,6 +463,14 @@ class Control(object):
 		actx.context_set_position((rctx.point[0]+top, rctx.point[1]+left))
 		actx.context_set_dimensions((width, height))
 		return actx
+
+	def install(self, monitor):
+		"""
+		# Erase, reframe, and update the given monitor..
+		"""
+		self.erase(monitor)
+		self.frame(monitor)
+		self.update(monitor, monitor.render())
 
 	def frame(self, monitor, offset=0):
 		"""
