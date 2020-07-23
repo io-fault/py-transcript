@@ -41,6 +41,21 @@ class Metrics(object):
 		self.counts = collections.defaultdict(int)
 		self.totals = (collections.defaultdict(int), collections.defaultdict(int))
 
+	def export(self):
+		"""
+		# Export a snapshot of the totals with total time.
+		"""
+		return self.time, dict(self.totals[0]), dict(self.totals[1])
+
+	def apply(self, snapshot):
+		"""
+		# Import an exported snapshot.
+		"""
+		time, units, counts = snapshot
+		for k, v in units.items():
+			self.update(k, v, counts.get(k, 0))
+		self.commit(time)
+
 	def recent(self, field:str):
 		"""
 		# Retrieve the value of the field as it's found within the history.
