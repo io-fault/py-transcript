@@ -36,6 +36,13 @@ class Traps:
 	def nop(*args):
 		pass
 
+	@staticmethod
+	def message_records(pack, monitor, stop, start, messages, channel):
+		"""
+		# End of Transaction callback that returns the frames making up the transaction.
+		"""
+		return [(start, messages, stop)]
+
 	@classmethod
 	def construct(Class, eox=nop, eop=nop, eog=nop):
 		return Class(eox, eop, eog)
@@ -63,6 +70,7 @@ def _launch(status, stderr=2, stdin=0):
 	try:
 		category, dimensions, xqual, xcontext, ki = next(status['process-queue'])
 		status['channel'] = xqual
+		status['aggregate'] = []
 	except StopIteration:
 		return None
 
@@ -77,7 +85,12 @@ def _launch(status, stderr=2, stdin=0):
 
 	return (rfd, category, dimensions)
 
-def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, range=range, next=next):
+def dispatch(
+		traps, plan, control, monitors, summary, title, queue,
+		window=8, kill=os.killpg,
+		range=range,
+		next=next
+	):
 	"""
 	# Execute a sequence of system commands while displaying their status
 	# according to the transaction messages they emit to standard out.
@@ -92,7 +105,6 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 	nmonitors = len(monitors)
 	ioa = io.FrameArray(unpack)
 
-	stctl = control
 	available = collections.deque(range(nmonitors))
 	statusd = {}
 	processing = True
@@ -128,7 +140,7 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 
 					monitor.title(next_channel[1], *next_channel[2])
 					ioa.connect(lid, next_channel[0])
-					stctl.install(monitor)
+					control.install(monitor)
 
 				if queue.terminal():
 					if not statusd:
@@ -154,14 +166,14 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 
 									monitor.title(next_channel[1], *next_channel[2])
 									ioa.connect(xlid, next_channel[0])
-									stctl.install(monitor)
+									control.install(monitor)
 							else:
 								# No more availability, break out of for-loop.
 								break
 
 			# Located before possible waits in &ioa.__iter__,
 			# but not directly after to allow seamless transitions.
-			stctl.flush()
+			control.flush()
 
 			# Cycle through sources, flush when complete.
 			for lid, sframes in ioa:
@@ -177,7 +189,7 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 					exit_status = execution.reap(pid, options=0)
 
 					# Send final snapshot to output. (stdout)
-					traps.eop(pack, monitor, status['channel'], pid, exit_status)
+					traps.eop(pack, monitor, status['channel'], status['aggregate'], pid, exit_status)
 
 					next_channel = _launch(status)
 					monitor.metrics.clear()
@@ -185,7 +197,7 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 					if next_channel is not None:
 						ioa.connect(lid, next_channel[0])
 						monitor.title(next_channel[1], *next_channel[2])
-						stctl.install(monitor)
+						control.install(monitor)
 						continue
 
 					queue.finish(status['source'])
@@ -193,7 +205,7 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 					available.append(lid)
 
 					summary.title(title, '/'.join(map(str, queue.status())))
-					stctl.install(summary)
+					control.install(summary)
 					status.clear()
 					continue
 
@@ -226,7 +238,9 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 						except ValueError:
 							pass
 						else:
-							traps.eox(monitor, stop, start, messages, status['channel'])
+							ext = traps.eox(pack, monitor, stop, start, messages, status['channel'])
+							if ext is not None:
+								status['aggregate'].extend(ext)
 					elif evtype == 'transaction-started':
 						metrics.update('executing', 1, 0)
 						mtotals.update('executing', 1, 0)
@@ -244,23 +258,23 @@ def dispatch(traps, plan, control, monitors, summary, title, queue, window=8, ra
 				deltas = set(mm.changes())
 				mm.commit(elapsed)
 				mm.trim(window)
-				stctl.update(m, m.delta(deltas))
+				control.update(m, m.delta(deltas))
 
 			tdeltas = set(mtotals.changes())
 			mtotals.commit(elapsed)
 			mtotals.trim(window)
 
 			summary.title(title, '/'.join(map(str, queue.status())))
-			stctl.frame(summary)
-			stctl.update(summary, summary.delta(tdeltas))
+			control.frame(summary)
+			control.update(summary, summary.delta(tdeltas))
 		else:
 			pass
 	finally:
-		stctl.flush()
+		control.flush()
 		ioa.__exit__(None, None, None) # Exception has the same effect.
 		for lid in statusd:
 			try:
-				os.killpg(statusd[lid]['pid'], signal.SIGKILL)
+				kill(statusd[lid]['pid'], signal.SIGKILL)
 			except (KeyError, ProcessLookupError):
 				pass
 			else:
