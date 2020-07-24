@@ -44,27 +44,12 @@ class Traps:
 		return [(start, messages, stop)]
 
 	@classmethod
-	def construct(Class, eox=nop, eop=nop, eog=nop):
-		return Class(eox, eop, eog)
+	def construct(Class, eox=None, eop=None, eog=None):
+		return Class(eox or Class.message_records, eop or Class.nop, eog or Class.nop)
 
 	eox: typing.Callable[[], None] = None
 	eop: typing.Callable[[], None] = None
 	eog: typing.Callable[[], None] = None
-
-def transaction(synopsis, duration):
-	"""
-	# Create aggregate status frame for the transaction.
-	"""
-	from ..status import frames
-	from ..status import types
-
-	msg = types.Message.from_string_v1("transaction[><]: Execution", protocol=frames.protocol)
-	msg.msg_parameters['envelope-fields'] = [synopsis]
-	msg.msg_parameters['data'] = types.Parameters.from_pairs_v1([
-		('duration', duration),
-	])
-
-	return msg
 
 def _launch(status, stderr=2, stdin=0):
 	try:
@@ -214,7 +199,6 @@ def dispatch(
 
 				for channel, msg in sframes:
 					evtype = msg.msg_event.symbol
-					xacts[channel].append(msg)
 
 					data = msg.msg_parameters['data']
 					if isinstance(data, Report) and data.event.protocol == metrics_protocol:
@@ -229,6 +213,9 @@ def dispatch(
 							metrics.update(n, u, c)
 							mtotals.update(n, u, c)
 
+						continue
+
+					xacts[channel].append(msg)
 					if evtype == 'transaction-stopped':
 						metrics.update('executing', -1, 0)
 						mtotals.update('executing', -1, 0)
