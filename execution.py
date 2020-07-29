@@ -121,6 +121,7 @@ def dispatch(
 					if next_channel is None:
 						queue.finish(status['source'])
 						available.append(lid)
+						del statusd[lid]
 						continue
 
 					monitor.title(next_channel[1], *next_channel[2])
