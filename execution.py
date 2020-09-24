@@ -71,7 +71,7 @@ def _launch(status, stderr=2, stdin=0):
 	return (rfd, category, dimensions)
 
 def dispatch(
-		traps, plan, control, monitors, summary, title, queue,
+		traps, plan, control, monitors, summary, title, constants, queue,
 		window=8, kill=os.killpg,
 		range=range,
 		next=next
@@ -94,7 +94,7 @@ def dispatch(
 	statusd = {}
 	processing = True
 	last = time()
-	summary.title(title, '*')
+	summary.title(title, *constants, '*')
 	mtotals = summary.metrics
 	mtotals.clear()
 
@@ -175,7 +175,8 @@ def dispatch(
 					exit_status = execution.reap(pid, options=0)
 
 					# Send final snapshot to output. (stdout)
-					traps.eop(pack, monitor, status['channel'], status['aggregate'], pid, exit_status)
+					eop_channel = '/'.join(('/'.join(constants), status['channel']))
+					traps.eop(pack, monitor, eop_channel, status['aggregate'], pid, exit_status)
 
 					next_channel = _launch(status)
 					monitor.metrics.clear()
@@ -190,7 +191,7 @@ def dispatch(
 					del statusd[lid]
 					available.append(lid)
 
-					summary.title(title, '/'.join(map(str, queue.status())))
+					summary.title(title, *constants, '/'.join(map(str, queue.status())))
 					control.install(summary)
 					status.clear()
 					continue
@@ -252,7 +253,7 @@ def dispatch(
 			mtotals.commit(elapsed)
 			mtotals.trim(window)
 
-			summary.title(title, '/'.join(map(str, queue.status())))
+			summary.title(title, *constants, '/'.join(map(str, queue.status())))
 			control.frame(summary)
 			control.update(summary, summary.delta(tdeltas))
 		else:
