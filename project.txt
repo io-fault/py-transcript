@@ -3,13 +3,13 @@
 		&<http://if.fault.io/project/information>
 
 /identifier/
-	&<http://fault.io/python/transcripts>
+	&<http://fault.io/python/transcript>
 /icon/
 	- (emoji)`🎛`
 /name/
-	`transcripts`
+	`transcript`
 /abstract/
-	Tools for processing status frames for logging and monitoring.
+	Status frame processing tools for logging and monitoring.
 
 /authority/
 	`fault.io`
