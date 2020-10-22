@@ -628,10 +628,11 @@ def setup(atexit=b'', type='prepared',
 	from ..terminal import control
 	screen = matrix.Screen()
 
-	device = control.setup(type,
+	device, tty_prep, tty_rest = control.setup(type,
 		atexit=screen.close_scrolling_region()+atexit,
 		destruct=destruct,
 	)
+	tty_prep()
 
 	return Control(device, screen, Context(screen.terminal_type))
 
