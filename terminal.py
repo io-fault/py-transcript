@@ -612,7 +612,7 @@ class Control(object):
 		self._write(init)
 		return self
 
-def setup(atexit=b'', type='prepared',
+def setup(atrestore=b'', type='prepared',
 		destruct=True,
 		Context=matrix.Context,
 	) -> Control:
@@ -625,14 +625,16 @@ def setup(atexit=b'', type='prepared',
 	# not supported by this interface as &Control only manages one
 	# &matrix.Context.
 	"""
+	import atexit
 	from ..terminal import control
 	screen = matrix.Screen()
 
 	device, tty_prep, tty_rest = control.setup(type,
-		atexit=screen.close_scrolling_region()+atexit,
+		atrestore=screen.close_scrolling_region()+atrestore,
 		destruct=destruct,
 	)
 	tty_prep()
+	atexit.register(tty_rest)
 
 	return Control(device, screen, Context(screen.terminal_type))
 
