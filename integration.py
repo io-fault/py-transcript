@@ -36,13 +36,13 @@ def select_failures(pack, monitor, stop, start, messages, channel):
 	if 'status' not in stopd:
 		return ()
 
-	cmd = startd.get_parameter('command')
 	if stopd['status'] != 0:
-		cmd = startd.get_parameter('command')
+		exe = startd.get_parameter('executable')
+		argv = startd.get_parameter('argv')
 		factor = startd.get_parameter('factor')
 		log = files.Path.from_absolute(startd.get_parameter('log'))
 		duration = stopd['time-offset'] - startd['time-offset']
-		return [(duration, cmd, stopd['status'], log, factor)]
+		return [(duration, exe, argv, stopd['status'], log, factor)]
 
 	# Not failure or not a build command.
 	return ()
@@ -53,17 +53,19 @@ def factor_report(transactions, chain=itertools.chain.from_iterable, protocol=fa
 	# Usually coupled with &select_failures to provide a report containing failed commands.
 	"""
 
-	r = types.Report.from_string_v1("process-failures[1]: build reports", protocol=protocol)
+	r = types.Report.from_string_v1("process-failures[1]: factor processing reports", protocol=protocol)
 
 	times = []
-	commands = []
+	executables = []
+	arguments = []
 	status = []
 	factors = []
 	logs = []
 
-	for duration, cmd, st, log, factor in transactions:
+	for duration, exe, argv, st, log, factor in transactions:
 		times.append(duration)
-		commands.append(cmd)
+		executables.append(exe)
+		arguments.append(argv)
 		status.append(st)
 		factors.append(factor)
 		with log.fs_open('rb') as f:
@@ -72,7 +74,8 @@ def factor_report(transactions, chain=itertools.chain.from_iterable, protocol=fa
 	r.r_parameters.specify([
 		('v-sequence', 'integer', 'times', times),
 		('v-sequence', 'integer', 'status', status),
-		('v-sequence', 'integer', 'commands', [str(x[0]) for x in commands]),
+		('v-sequence', 'string', 'executables', executables),
+		('v-sequence', 'string', 'arguments', [' '.join(x) for x in arguments]),
 		('v-sequence', 'string', 'factors', factors),
 		('v-sequence', 'octets', 'errors', logs),
 	])
