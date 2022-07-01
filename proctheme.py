@@ -5,11 +5,11 @@ from . import terminal
 from ..context import tools
 
 order = [
-	('executing', 8),
-	('usage', 8),
-	('cached', 8),
-	('failed', 8),
-	('processed', 8),
+	('executing', 'work.w_executing', 8),
+	('usage', 'usage.r_process', 8),
+	('cached', 'work.w_granted', 8),
+	('failed', 'work.w_failed', 8),
+	('processed', 'work.w_executed', 8),
 ]
 
 formats = [
@@ -21,5 +21,5 @@ formats = [
 ]
 
 types = {
-	'usage': 'rate',
+	'usage': 'rate_window',
 }

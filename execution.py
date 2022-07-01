@@ -2,79 +2,100 @@
 # System process status display using transaction frames.
 """
 import os
+import sys
 import collections
 import typing
 import signal
 from dataclasses import dataclass
 
 from ..context import tools
-from ..time.sysclock import elapsed as time
+from ..time.sysclock import now, elapsed as time
 from ..system import execution
-from ..status.frames import stdio
-from ..status.types import Report
+from ..status import frames
 
 from . import io
-from .frames import protocol as metrics_protocol
-
-@dataclass
-class Traps:
-	"""
-	# Callback set for &dispatch.
-
-	# [ Properties ]
-	# /eox/
-		# End of transaction callback.
-		# Called whenever a transaction is closed by a job.
-	# /eop/
-		# End of process callback.
-		# Called whenever a process of a job exits.
-	# /eog/
-		# End of group callback.
-	"""
-
-	@staticmethod
-	def nop(*args):
-		pass
-
-	@staticmethod
-	def message_records(pack, monitor, stop, start, messages, channel):
-		"""
-		# End of Transaction callback that returns the frames making up the transaction.
-		"""
-		return [(start, messages, stop)]
-
-	@classmethod
-	def construct(Class, eox=None, eop=None, eog=None):
-		return Class(eox or Class.message_records, eop or Class.nop, eog or Class.nop)
-
-	eox: typing.Callable[[], None] = None
-	eop: typing.Callable[[], None] = None
-	eog: typing.Callable[[], None] = None
 
 def _launch(status, stderr=2, stdin=0):
+	# Get the next invocation from the iterator and spawn it.
 	try:
-		category, dimensions, xqual, xcontext, ki = next(status['process-queue'])
-		status['channel'] = xqual
-		status['aggregate'] = []
+		category, dimensions, xcontext, ki = next(status['process-queue'])
+		status['category'] = category
+		status['identifier'] = xcontext
 	except StopIteration:
 		return None
 
 	rfd, wfd = os.pipe()
 	try:
 		status['pid'] = ki.spawn(fdmap=[(0,0), (wfd,1), (2,2)])
-		os.close(wfd)
 	except:
 		os.close(rfd)
-		os.close(wfd)
 		raise
+	finally:
+		os.close(wfd)
 
 	return (rfd, category, dimensions)
 
-def dispatch(
-		traps, plan, control, monitors, summary, title, constants, queue,
-		window=8, kill=os.killpg,
-		range=range,
-		next=next
+def _field(key, ext, default=None):
+	# Retrieve the field value or default if not present or is an empty string.
+	if key in ext:
+		return ext[key][0] or default
+	else:
+		return default
+
+def _closed(failed, start, stop, xframes, extension, /,
+		executed='<>', failure='><',
+		ts=tools.partial(_field, '@timestamp'),
+	):
+	"""
+	# Join a start and stop frame.
+	"""
+	ext = extension
+	ext.update(start.f_extension)
+	ext.update(stop.f_extension)
+
+	# Set duration from start and stop timestamps.
+	if '@duration' not in ext:
+		start_time = int(ts(start.f_extension, 0))
+		stop_time = int(ts(stop.f_extension, 0))
+		ext['@duration'] = [str(-(stop_time - start_time))]
+
+	# Frame sources should provide non-zero metrics on both sides.
+	metrics = start.f_extension.get('@metrics', []) + stop.f_extension.get('@metrics', [])
+	metrics = [x for x in metrics if x.strip()]
+	if metrics:
+		ext['@metrics'] = metrics
+
+	if '@frames' in ext and not ext['@frames']:
+		del ext['@frames']
+
+	# If failure is indicated, the failed transaction type should be preferred.
+	if failed:
+		typ = failure
+	else:
+		# Executed or Granted. Use the designated type if any.
+		typ = ext.pop('@frame-type', [executed])[0]
+
+	return frames.compose(typ, stop.f_image, stop.f_channel, ext)
+
+def _open_frame(status, fcompose=frames.compose):
+	ctx = status['category']
+	ts = now().select('iso')
+
+	ext = {
+		'@timestamp': [str(time())],
+	}
+	if status['identifier']:
+		ctx = status['identifier']
+		ext['@transaction'] = [ctx]
+
+	return fcompose('->', ctx + ': ' + ts, None, ext)
+
+def dispatch(meta, log,
+		plan, control, monitors, summary, title, queue,
+		opened=False,
+		select=(lambda t,m,f: False), alerts=True,
+		window=8, frequency=64,
+		kill=os.killpg, range=range, next=next
 	):
 	"""
 	# Execute a sequence of system commands while displaying their status
@@ -83,20 +104,29 @@ def dispatch(
 	# Commands are executed simultaneously so long as a monitor is available to display
 	# their status.
 	"""
+	closetypes = {
+		(False, True): '<>',
+		(False, False): '><',
+	}
 
-	unpack, pack = stdio()
+	from .metrics import Procedure
+	zero = Procedure.create()
+
 	total_messages = 0
 	message_count = 0
-	nmonitors = len(monitors)
-	ioa = io.FrameArray(unpack)
+	ioa = io.FrameArray(timeout=frequency)
 
-	available = collections.deque(range(nmonitors))
+	available = collections.deque(range(len(monitors)))
 	statusd = {}
 	processing = True
 	last = time()
-	summary.title(title, *constants, '*')
-	mtotals = summary.metrics
-	mtotals.clear()
+	summary.reset(last, zero)
+	for m in monitors:
+		m.reset(last, zero)
+	mtotal = zero
+
+	summary.title(title, '/'.join(map(str, queue.status())))
+	control.install(summary)
 
 	try:
 		ioa.__enter__()
@@ -105,17 +135,16 @@ def dispatch(
 				# Open processing lanes take from queue.
 				for ident in queue.take(len(available)):
 					lid = available.popleft()
-					kii = iter(plan(ident))
+					iki = iter(plan(ident))
 
 					status = statusd[lid] = {
-						'channel': None,
 						'source': ident,
-						'process-queue': kii,
+						'process-queue': iki,
 						'transactions': collections.defaultdict(list),
 					}
 
 					monitor = monitors[lid]
-					monitor.metrics.clear()
+					monitor.reset(last, zero)
 
 					next_channel = _launch(status)
 					if next_channel is None:
@@ -127,6 +156,9 @@ def dispatch(
 					monitor.title(next_channel[1], *next_channel[2])
 					ioa.connect(lid, next_channel[0])
 					control.install(monitor)
+
+					if opened:
+						log.emit(_open_frame(status))
 
 				if queue.terminal():
 					if not statusd:
@@ -142,56 +174,68 @@ def dispatch(
 								status = dict(statusd[lid])
 								next_channel = _launch(status)
 								if next_channel is None:
-									# continues for-loop
+									# continues for-loop, check next list.
 									break
 								else:
-									xlid = available.popleft()
+									# Per-channel open transactions.
 									status['transactions'] = collections.defaultdict(list)
+									xlid = available.popleft()
 									statusd[xlid] = status
 									monitor = monitors[xlid]
+									monitor.reset(time(), zero)
 
 									monitor.title(next_channel[1], *next_channel[2])
 									ioa.connect(xlid, next_channel[0])
 									control.install(monitor)
+
+									if opened:
+										log.emit(_open_frame(status))
+									log.flush()
 							else:
-								# No more availability, break out of for-loop.
+								# No more availability, exit for-sources.
 								break
 
 			# Located before possible waits in &ioa.__iter__,
 			# but not directly after to allow seamless transitions.
 			control.flush()
 
+			# Calculate change in time for Metrics.commit.
+			next_time = time()
+
 			# Cycle through sources, flush when complete.
 			for lid, sframes in ioa:
+				monitor = monitors[lid]
 				status = statusd[lid]
 				xacts = status['transactions']
 				srcid = status['source']
-				monitor = monitors[lid]
-				metrics = monitor.metrics
 
 				if sframes is None:
 					# Closed.
-					pid = status['pid']
-					exit_status = execution.reap(pid, options=0)
+					pdelta = execution.reap(status['pid'], options=0)
 
-					# Send final snapshot to output. (stdout)
-					eop_channel = '/'.join(('/'.join(constants), status['channel']))
-					traps.eop(pack, monitor, eop_channel, status['aggregate'], pid, exit_status)
+					# Send final snapshot to log.
+					ftype = closetypes.get((opened, pdelta.status == 0), '<-')
+					xf = monitor.frame(ftype, status['identifier'])
+					log.emit(xf)
+					log.flush()
 
 					next_channel = _launch(status)
-					monitor.metrics.clear()
+					monitor.reset(next_time, zero)
 
 					if next_channel is not None:
 						ioa.connect(lid, next_channel[0])
 						monitor.title(next_channel[1], *next_channel[2])
 						control.install(monitor)
+						if opened:
+							log.emit(_open_frame(status))
 						continue
 
 					queue.finish(status['source'])
 					del statusd[lid]
 					available.append(lid)
 
-					summary.title(title, *constants, '/'.join(map(str, queue.status())))
+					qs = queue.status()
+					summary.title(title, '/'.join(map(str, (qs[0]-len(statusd), qs[1]))))
 					control.install(summary)
 					status.clear()
 					continue
@@ -199,65 +243,71 @@ def dispatch(
 				nframes = len(sframes)
 				message_count += nframes
 
-				for channel, msg in sframes:
-					evtype = msg.msg_event.symbol
+				pdelta = zero
+				for f in sframes:
+					channel = f.f_channel
+					evtype = f.f_event.symbol
+					ext = f.f_extension or {}
+					xid = (channel, tuple(ext.get('@transaction', ())))
 
-					data = msg.msg_parameters['data']
-					if isinstance(data, Report) and data.event.protocol == metrics_protocol:
-						# Metrics update.
-						metrics.update('duration', data.r_parameters['time'], 1)
-						mtotals.update('duration', data.r_parameters['time'], 1)
+					# Update the monitors view.
+					delta = zero
+					for x in ext.get('@metrics', ()):
+						delta += Procedure.structure(x)
+					pdelta += delta
 
-						fnames = data.r_parameters['fields']
-						funits = data.r_parameters['units']
-						fcounts = data.r_parameters['counts']
-						for n, u, c in zip(fnames, funits, fcounts):
-							metrics.update(n, u, c)
-							mtotals.update(n, u, c)
+					if evtype == 'transaction-started':
+						start_frame = f
+						xframes = list()
+						xacts[xid] = (f, xframes)
+						rf = start_frame
+						failure = None
+					elif evtype == 'transaction-stopped':
+						start_frame, xframes = xacts.pop(xid, (None, ()))
+						failure = (delta.work.w_failed > 0)
+						rf = _closed(failure, start_frame, f, xframes, {})
+					else:
+						start_frame, xframes = xacts.get(xid, (None, ()))
+						rf = f
+						failure = (evtype == 'transaction-failed')
 
-						continue
+					# Report the combined frame to log if selected.
+					if select(None, delta, rf):
+						log.emit(rf)
+						log.flush()
 
-					xacts[channel].append(msg)
-					if evtype == 'transaction-stopped':
-						metrics.update('executing', -1, 0)
-						mtotals.update('executing', -1, 0)
+					# Report the failures to meta if alerts are enabled.
+					if failure and alerts:
+						meta.emit(rf)
+						fi = rf.f_extension.get('@failure-image', ())
+						if len(fi) > 1:
+							fi = iter(fi); next(fi)
+							op = rf.f_extension.get('@operation', ())
+							if op:
+								meta.write('\n'.join(op))
+								meta.write('\n')
+							meta.write('\n'.join(fi))
+							meta.write('\n')
+						meta.flush()
+					# Frame Processing
+				mtotal += pdelta
+				monitor.update(next_time, monitor.current + pdelta)
 
-						try:
-							start, *messages, stop = xacts.pop(channel)
-						except ValueError:
-							pass
-						else:
-							ext = traps.eox(pack, monitor, stop, start, messages, status['channel'])
-							if ext is not None:
-								status['aggregate'].extend(ext)
-					elif evtype == 'transaction-started':
-						metrics.update('executing', 1, 0)
-						mtotals.update('executing', 1, 0)
-
-			# Calculate change in time for Metrics.commit.
-			next_time = time()
-			# millisecond precision in Monitor.metrics.
-			elapsed = (next_time.decrease(last).select('millisecond') or 1)
-			elapsed /= 1000 # convert to float seconds
 			last = next_time
 
 			# Update duration and any other altered fields.
 			for m in monitors:
-				mm = m.metrics
-				deltas = set(mm.changes())
-				mm.commit(elapsed)
-				mm.trim(window)
-				control.update(m, m.delta(deltas))
+				m.elapse(next_time)
+				control.update(m, m.render())
 
-			tdeltas = set(mtotals.changes())
-			mtotals.commit(elapsed)
-			mtotals.trim(window)
-
-			summary.title(title, *constants, '/'.join(map(str, queue.status())))
-			control.frame(summary)
-			control.update(summary, summary.delta(tdeltas))
+			summary.update(next_time, mtotal)
+			qs = queue.status()
+			summary.title(title, '/'.join(map(str, (qs[0]-len(statusd), qs[1]))))
+			control.update(summary, summary.render())
 		else:
 			pass
+	except BrokenPipeError:
+		pass
 	finally:
 		control.flush()
 		ioa.__exit__(None, None, None) # Exception has the same effect.

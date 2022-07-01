@@ -9,7 +9,7 @@ import signal
 
 from ..context import tools
 from ..system import execution
-from ..status import frames as st_frames
+from ..status import frames
 
 def allocate_line_buffer(fd, encoding='utf-8'):
 	return io.TextIOWrapper(io.BufferedReader(io.FileIO(fd, mode='r'), 2048), encoding)
@@ -26,7 +26,6 @@ def spawnframes(invocation,
 	# the process a &signal.SIGKILL.
 	"""
 	interrupted = False
-	loadframe, packframe = st_frames.stdio()
 
 	rfd, wfd = os.pipe()
 	pid = invocation.spawn(fdmap=[(stdin,0), (wfd,1), (stderr,2)])
@@ -38,17 +37,17 @@ def spawnframes(invocation,
 		with framesrc:
 			lines = [framesrc.readline()] # Protocol message.
 			while lines:
-				frames = []
+				frameset = []
 				for line in lines:
 					try:
-						frames.append(loadframe(line))
+						frameset.append(frames.structure(line))
 					except:
 						# Any exception means it's not a well formed frame.
 						# In such cases, relay the original line to standard error.
 						exceptions.write('> ' + line)
 					finally:
 						pass
-				yield frames
+				yield frameset
 				lines = framesrc.readlines(readsize)
 	except (GeneratorExit, KeyboardInterrupt) as exc:
 		interrupted = True
@@ -73,11 +72,14 @@ class FrameArray(object):
 		from ..system import io
 		return (io.Array, io.alloc_input)
 
-	def __init__(self, readframe, encoding='utf-8', newline=b'\n', timeout=145):
+	def __init__(self,
+		readframe=frames.structure,
+		encoding='utf-8', newline=b'\n', timeout=145
+	):
 		self.timeout = timeout
 		self.newline = newline
 		self.encoding = encoding
-		self.unpack = readframe
+		self._unpack = readframe
 		self._ioa = None
 		self._linebuffers = {}
 
@@ -103,7 +105,7 @@ class FrameArray(object):
 		# Decode and unpack the binary status frame using Array's configuration.
 		"""
 		try:
-			return self.unpack(line.decode(self.encoding))
+			return self._unpack(line.decode(self.encoding))
 		except Exception as err:
 			pass
 
@@ -115,10 +117,10 @@ class FrameArray(object):
 			]
 
 	def __iter__(self):
-		unpack = self.unpack
+		unpack = self._unpack
 
 		for rid, data, term, channel in self.collect():
-			frames = []
+			frameset = []
 			buffer = self._linebuffers[rid]
 			buffer += data
 
@@ -132,7 +134,7 @@ class FrameArray(object):
 					del lines[-1:]
 
 				# Emit empty to signal that some buffer change occurred.
-				frames.extend(map(self.frame, lines))
+				frameset.extend(map(self.frame, lines))
 
 			del buffer
 
@@ -145,13 +147,174 @@ class FrameArray(object):
 						buffer += self.newline
 
 					lines = buffer.splitlines(keepends=True)
-					frames.extend(map(self.frame, lines))
+					frameset.extend(map(self.frame, lines))
 
-				yield (rid, frames)
+				yield (rid, frameset)
 				yield (rid, None)
 			elif channel.exhausted:
 				# Only reads.
 				channel.acquire(bytearray(1028*8))
-				yield (rid, frames)
+				yield (rid, frameset)
 			else:
-				yield (rid, frames)
+				yield (rid, frameset)
+
+class Log(object):
+	"""
+	# Status frame serialization interface and write buffer.
+	"""
+
+	#* REFACTOR: Parameterize theme so host/user specific overrides may be employed.
+	highlights = {
+		'reset': '\x1b[0m',
+		'error': '\x1b[31m',
+		'warning': '\x1b[33m',
+		'notice': '\x1b[34m',
+		'synopsis': '\x1b[38;5;247m',
+	}
+
+	@staticmethod
+	def _xid(extension, xid):
+		if xid:
+			if extension is None:
+				extension = {}
+			extension['@transaction'] = xid.split('\n')
+
+		return extension
+
+	@classmethod
+	def stdout(Class, channel=None, encoding=None):
+		"""
+		# Construct a &Log instance for serializing frames to &sys.stdout.
+		"""
+		from sys import stdout
+		return Class(frames.sequence, stdout.buffer, encoding or stdout.encoding, channel=channel)
+
+	@classmethod
+	def stderr(Class, channel=None, encoding=None):
+		"""
+		# Construct a &Log instance for serializing frames to &sys.stderr.
+		"""
+		from sys import stderr
+		return Class(frames.sequence, stderr.buffer, encoding or stderr.encoding, channel=channel)
+
+	def __init__(self, pack, stream, encoding, frequency=8, channel=None):
+		self.channel = channel
+		self.encoding = encoding
+		self.frequency = frequency
+		self.stream = stream
+		self._pack = pack
+		self._send = stream.write
+		self._flush = stream.flush
+		self._count = 0
+
+	def transaction(self) -> bool:
+		"""
+		# Increment the operation count and check if it exceeds the frequency.
+		# If in excess, flush the buffer causing serialized messages to be written
+		# to the configured stream.
+
+		# Return &True when a &flush is performed, otherwise &False.
+		"""
+		self._count += 1
+		if self._count >= self.frequency:
+			self.flush()
+			return True
+		return False
+
+	def flush(self):
+		"""
+		# Write any emitted messages to the configured stream and reset the operation count.
+		"""
+		self._count = 0
+		self._flush()
+
+	def emit(self, frame):
+		"""
+		# Send a &message using the given &channel identifier.
+		"""
+		return self._send(self._pack(frame, channel=self.channel).encode(self.encoding))
+
+	def inject(self, data:bytes):
+		"""
+		# Write bytes directly to the log's stream.
+		"""
+		self._send(data)
+		self._count += 1
+
+	def write(self, text:str):
+		"""
+		# Write text to the log's stream incrementing the transmit count.
+		"""
+		self._send(text.encode(self.encoding))
+		self._count += 1
+
+	def declare(self, datum='2000-01-02', timestamp=0):
+		"""
+		# Emit a protocol declaration.
+		"""
+		ext = {
+			'@timestamp': [str(timestamp)],
+			'@clock': ['metric-seconds -9 ' + datum],
+		}
+		self.emit(frames.declaration())
+
+	def compose(self, type, severity, qualifier, text, extension,
+			channel=None,
+			_compose=frames.compose
+		):
+		sy = self.highlights['synopsis']
+		re = self.highlights['reset']
+		syn = ''.join([
+			self.highlights[severity],
+			qualifier, re,
+			sy, ': ', text[0]
+		])
+
+		hi = itertools.cycle((re, sy))
+		for seg, hi in zip(text[1:], hi):
+			if seg:
+				syn += hi + seg
+
+		if len(text) % 2 == 1:
+			syn += re
+
+		if channel is None:
+			channel = self.channel
+
+		return _compose(type, syn, channel, extension or {})
+
+	def notice(self, *text, extension=None, xid=None, label='NOTICE'):
+		extension = self._xid(extension, xid)
+		msg = self.compose('!#', 'notice', label, text, extension)
+		self.emit(msg)
+		return msg
+
+	def warning(self, *text, extension=None, xid=None, label='WARNING'):
+		extension = self._xid(extension, xid)
+		msg = self.compose('!#', 'warning', label, text, extension)
+		self.emit(msg)
+		return msg
+
+	def error(self, *text, extension=None, xid=None, label='ERROR'):
+		extension = self._xid(extension, xid)
+		msg = self.compose('!#', 'error', label, text, extension)
+		self.emit(msg)
+		return msg
+
+	def xact_open(self, xid, synopsis, extension):
+		extension = self._xid(extension, xid)
+		f = frames.compose("->", synopsis, self.channel, extension)
+		self.emit(f)
+		return f
+
+	def xact_status(self, xid, synopsis, extension):
+		extension = self._xid(extension, xid)
+		f = frames.compose('--', synopsis, self.channel, extension)
+		self.emit(f)
+		return f
+
+	def xact_close(self, xid, synopsis, extension):
+		extension = self._xid(extension, xid)
+		f = frames.compose("<-", synopsis, self.channel, extension)
+		self.emit(f)
+		return f

@@ -9,144 +9,25 @@ import collections
 
 from ..context import tools
 from ..terminal import matrix
-from ..terminal import palette
 from ..time import sysclock
+from ..status import frames
 
 def duration_repr(seconds) -> typing.Tuple[float, str]:
-	if seconds < 60:
+	if seconds < 90:
+		# seconds, minute and a half
 		return (seconds / 1.0, 's')
-	elif seconds < (60*60):
-		# minutes
+
+	minutes = seconds / 60
+	if minutes < 90:
+		# minutes, hour and a half
 		return (seconds / 60, 'm')
 
-	hours = seconds / (60*60)
-	if hours < 100:
+	hours = minutes / 60
+	if hours < 240:
 		return (hours, 'h')
 
-	return (hours / 24, 'd')
-
-class Metrics(object):
-	"""
-	# Storage class for monitor field data.
-	# Maintains a history along with a totals snapshot.
-	"""
-
-	def __init__(self):
-		self.clear()
-
-	def clear(self):
-		self.history = []
-		self.time = 0 # Implied time field.
-		self.units = collections.defaultdict(int)
-		self.counts = collections.defaultdict(int)
-		self.totals = (collections.defaultdict(int), collections.defaultdict(int))
-
-	def export(self):
-		"""
-		# Export a snapshot of the totals with total time.
-		"""
-		return self.time, dict(self.totals[0]), dict(self.totals[1])
-
-	def apply(self, snapshot):
-		"""
-		# Import an exported snapshot.
-		"""
-		time, units, counts = snapshot
-		for k, v in units.items():
-			self.update(k, v, counts.get(k, 0))
-		self.commit(time)
-
-	def recent(self, field:str):
-		"""
-		# Retrieve the value of the field as it's found within the history.
-		"""
-		i = 0
-		for d, units, counts in self.history:
-			i += units[field]
-		return i
-
-	def rate(self, field:str):
-		"""
-		# The rate of the field with respect to the recent history.
-		# The overall rate can be calculated with
-		# (syntax/python)`m.total(field0) / m.time`.
-		"""
-		i = 0
-		t = 0
-		for d, units, counts in self.history:
-			i += units.get(field, 0)
-			t += d
-
-		return i / t
-
-	def overall(self, field:str):
-		"""
-		# The overall rate.
-		"""
-		return self.totals[0][field] / self.time
-
-	def average(self, field:str):
-		"""
-		# The average of the field within the history.
-		"""
-		return sum(units.get(field, 0) for (d, units, counts) in self.history) / len(self.history)
-
-	def total(self, field:str):
-		"""
-		# The total of the field.
-		"""
-		return self.totals[0][field]
-
-	def update(self, key, value, count=1):
-		"""
-		# Update the total and the working units.
-		"""
-		self.units[key] += value
-		self.counts[key] += count
-		self.totals[0][key] += value
-		self.totals[1][key] += count
-
-	def changes(self):
-		"""
-		# Create iterator reporting the fields with changes in units.
-		"""
-		return self.units.keys()
-
-	def commit(self, time):
-		self.history.append((time, self.units, self.counts))
-		self.time += time
-		self.units = collections.defaultdict(int)
-		self.counts = collections.defaultdict(int)
-
-	def trim(self, window=8):
-		"""
-		# Remove history records that are past the &window.
-		"""
-		t = 0
-		i = None
-		data = None
-		for (d, units, counts), i in zip(reversed(self.history), range(len(self.history) - 1, -1, -1)):
-			assert units is self.history[i][1]
-
-			t += d
-			if t > window:
-				break
-		else:
-			# Nothing beyond window.
-			return
-
-		# Maintain some data for the time that is still within the window.
-		time_removed = t - window
-		time_remains = d - time_removed
-
-		f = time_remains / d
-		del self.history[:i]
-		for k, v in units.items():
-			units[k] *= f
-			counts[k] *= f
-
-		assert self.history[0][1] is units
-		self.history[0] = (time_remains, units, counts)
+	days = hours / 24
+	return (days, 'd')
 
 class Layout(object):
 	"""
@@ -179,7 +60,8 @@ class Layout(object):
 	def __init__(self, fields:Fields, **updates):
 		self.labels = {}
 		self.order = [x[0] for x in fields]
-		self.cells = dict(fields)
+		self.paths = [tuple(x[1].split('.')) for x in fields]
+		self.cells = {x[0]: x[2] for x in fields}
 		self.cells.update(updates.items())
 
 	def fields(self):
@@ -187,12 +69,25 @@ class Layout(object):
 		# Iterate over the fields in their designated order along with separators
 		# that can be used to follow the rendered field.
 		"""
-		return zip(self.order, self.separators(len(self.order)))
+		return zip(self.order, self.paths, self.separators(len(self.order)))
+
+	def positions(self):
+		"""
+		# Join the field identifier, cell allocation, and field label in
+		# the order designated by &order.
+		"""
+		fl = self.labels
+		cc = self.cells
+
+		for fid in self.order:
+			yield (fid, fl[fid], cc[fid])
 
 class Theme(object):
 	"""
-	# The rendering methods and parameters used by a &Monitor.
+	# The rendering methods and parameters used by a &Status.
 	"""
+	from ..terminal import palette
+
 	Formatter = typing.Tuple[str, str]
 
 	def default_render_method(self, key, field):
@@ -241,20 +136,25 @@ class Theme(object):
 		self.rendermethod[type] = render
 
 	def __init__(self, default:matrix.Context.RenderParameters):
-		from ..terminal import palette
+		self.rendertraits = default
+		self.stylesets = {}
 		self.rendermethod = {}
-		plain = default.apply()
-		self.stylesets = {
+
+	def configure(self, colors):
+		plain = self.rendertraits.apply()
+		rctl = plain.apply
+		self.stylesets.update({
 			# Time is expected to be common among all themes.
 			'plain': plain,
-			'bold': plain.apply('bold'),
-			's-timeunit': plain.apply(textcolor=palette.colors['blue']),
-			'm-timeunit': plain.apply(textcolor=palette.colors['yellow']),
-			'h-timeunit': plain.apply(textcolor=palette.colors['orange']),
-			'd-timeunit': plain.apply(textcolor=palette.colors['red']),
-			'Label': plain.apply(textcolor=palette.colors['foreground-adjacent']),
-			'Label-Emphasis': plain.apply('bold', textcolor=palette.colors['foreground-adjacent']),
-		}
+			'bold': rctl('bold'),
+			's-timeunit': rctl(textcolor=colors['blue']),
+			'm-timeunit': rctl(textcolor=colors['yellow']),
+			'h-timeunit': rctl(textcolor=colors['orange']),
+			'd-timeunit': rctl(textcolor=colors['red']),
+			'Label': rctl(textcolor=colors['foreground-adjacent']),
+			'Label-Emphasis': rctl('bold', textcolor=colors['foreground-adjacent']),
+		})
+		return self
 
 	def style(self, celltexts:typing.Sequence[Formatter]):
 		"""
@@ -274,7 +174,7 @@ class Theme(object):
 		r_method = self.rendermethod.get(type) or partial(self.default_render_method, type)
 		return Phrase(*self.style(r_method(field)))
 
-class Monitor(object):
+class Status(object):
 	"""
 	# Allocated area for status display of a set of changing fields.
 
@@ -283,44 +183,37 @@ class Monitor(object):
 	"""
 
 	view_state_loop = {
-		'total': 'rate',
-		'rate': 'overall',
-		'overall': 'total',
+		'total': 'rate_window',
+		'rate_window': 'rate_overall',
+		'rate_overall': 'total',
 	}
 
 	unit_type_separators = {
-		'total': ' ',
-		'rate': '/',
-		'overall': '^',
+		'total': '+',
+		'rate_window': '<',
+		'rate_overall': '^',
 	}
 
 	def __init__(self, theme:Theme, layout:Layout, context:matrix.Context):
 		self.theme = theme # Style sets and value rendering methods.
-		self.context = context # fault.terminal drawing context.
 		self.layout = layout # Field Ordering and Width
-		self.metrics = Metrics() # Raw value sets and window.
+		self.context = context # fault.terminal drawing context.
+		self.metrics = None
 		self.view = {} # Field view identifying value filtering (rate vs total).
 
-		# Monitor local:
+		# Status local:
 		self._title = None
 		self._prefix = None
 		self._suffix = None
-		self._positions = list(self._calculate_fields())
-
-		self._pcache = {}
-		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
-			self._pcache[k] = (fpad, position, cells, lc)
+		self._update_field_cache()
 
 	def _calculate_fields(self, alignment=1):
-		Phrase = self.context.Phrase
 		position = 0
+		trender = self.theme.render
 
-		fl = self.layout.labels
-		cc = self.layout.cells
-		for f in self.layout.order:
-			cells = cc[f]
-			label = self.theme.render('label-'+f, fl[f])
-			lc = label.cellcount()
+		for fid, flabel, cells in self.layout.positions():
+			rlabel = trender('label-'+fid, flabel)
+			lc = rlabel.cellcount()
 			usage = abs(cells) + lc + 2
 			yield (position, cells, lc)
 
@@ -330,6 +223,47 @@ class Monitor(object):
 				position += alignment
 
 		yield (position, 0, 0)
+
+	def _update_field_cache(self):
+		self._positions = list(self._calculate_fields())
+		self._pcache = {
+			k: (path, fpad, position, cells, lc)
+			for (k, path, fpad), (position, cells, lc) in zip(self.layout.fields(), self._positions)
+		}
+
+	def reset(self, time, metrics):
+		"""
+		# Reset the metrics records using the given entry as the only one.
+		"""
+		self.metrics = [(time, metrics)]
+
+	@property
+	def current(self):
+		return self.metrics[-1][1]
+
+	def elapse(self, time):
+		"""
+		# Update the time field on the last metrics record.
+		"""
+		cur = self.metrics[-1][0]
+		if cur == time:
+			return
+		self.metrics[-1] = (time, self.metrics[-1][1])
+
+	def update(self, time, metrics, window=8*(10**9)):
+		"""
+		# Update the metrics record for the given point in time.
+		"""
+		self.metrics.append((time, metrics))
+
+		cutoff = time - window
+		for i, x in enumerate(self.metrics, 1):
+			if x[0] > cutoff:
+				del self.metrics[1:i]
+				break
+
+	def duration(self):
+		return (self.metrics[-1][0] - self.metrics[0][0])
 
 	def cycle(self, field):
 		"""
@@ -363,23 +297,61 @@ class Monitor(object):
 		"""
 		self._title = (title, dimensions)
 
+	def window_period(self):
+		"""
+		# Calculate the current metrics window size.
+		"""
+		try:
+			start = self.metrics[1][0]
+		except IndexError:
+			start = self.metrics[0][0]
+
+		return self.metrics[-1][0] - start
+
+	def origin(self, field):
+		return self.metrics[0][1][field]
+
+	def window_delta(self, field):
+		if len(self.metrics) <= i:
+			i=0
+
+		start = self.metrics[i][1][field]
+		stop = self.metrics[-1][1][field]
+		return stop - start
+
+	def edge(self, field, i=1):
+		if len(self.metrics) <= i:
+			i=0
+		return self.metrics[i][1][field]
+
+	def total(self, field):
+		return self.metrics[-1][1][field]
+
+	def rate_window(self, field):
+		delta = self.total(field) - self.edge(field)
+		return delta / self.window_period()
+
+	def rate_overall(self, field):
+		delta = self.total(field) - self.edge(field)
+		return delta / self.duration()
+
 	def render(self, filter=(lambda x: False), offset=58):
 		render = self.theme.render
 		layout = self.layout
 		metrics = self.metrics
 
 		label = render('Label', "duration")
-		value = render('duration', metrics.time)
+		value = render('duration', self.duration() / (10**9))
 		yield 'total', label, value, 40, 8 - value.cellcount()
 
-		for (k, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
+		for (k, path, fpad), (position, cells, lc) in zip(layout.fields(), self._positions):
 			utype = self.view.get(k, 'total')
-			readv = getattr(metrics, utype)
+			readv = getattr(self, utype)
 			try:
-				v = readv(k)
+				v = readv(path)
 			except ZeroDivisionError:
 				utype = 'total'
-				v = metrics.total(k)
+				v = self.total(path)
 
 			if filter(v):
 				continue
@@ -397,20 +369,20 @@ class Monitor(object):
 		metrics = self.metrics
 
 		label = render('Label', "duration")
-		value = render('duration', metrics.time)
+		value = render('duration', self.duration() / (10**9))
 		yield 'total', label, value, 40, 8 - value.cellcount()
 
 		fields = ((k, self._pcache[k]) for k in fields if k in self._pcache)
-		for k, (fpad, position, cells, lc) in fields:
+		for k, (path, fpad, position, cells, lc) in fields:
 			utype = self.view.get(k, 'total')
-			readv = getattr(metrics, utype)
+			readv = getattr(self, utype)
 			try:
-				v = readv(k)
+				v = readv(path)
 			except ZeroDivisionError:
 				utype = 'total'
-				v = metrics.total(k)
-			value = render(k, v)
+				v = self.total(path)
 
+			value = render(k, v)
 			lstr = labels.get(k, k)
 			ncells = value.cellcount()
 			label = render('Label', lstr)
@@ -434,24 +406,60 @@ class Monitor(object):
 
 	def snapshot(self, encoding='utf-8') -> bytes:
 		"""
-		# A bytes form of the &Monitor.phrase. (The image without cursor movement)
+		# A bytes form of the &Status.phrase. (The image without cursor movement)
 		"""
 		l = list(self.phrase(filter=(lambda x: x in {0,0.0,"0"})))
 		cells = sum(x.cellcount() for x in l)
 		rph = map(self.context.render, l)
 		return cells, b''.join(itertools.chain.from_iterable(rph)).decode('utf-8')
 
-	def synopsis(self) -> str:
+	def profile(self):
+		"""
+		# Construct a triple containing the start and stop time and the final metrics.
+		"""
+		return (self.metrics[0][0], self.metrics[-1][0], self.metrics[-1][1])
+
+	def synopsis(self, context=None, vmap={'rate_window':'rate_overall'}):
 		"""
 		# Construct a status frame synopsis using the monitor's configuration and metrics.
 		"""
-		m = self.metrics
-		cells, mss = self.snapshot()
-		return self._title[0] + ': ' + mss + self.context.reset_text().decode('utf-8')
+		sv = dict(self.view)
+		try:
+			for k, v in list(self.view.items()):
+				self.view[k] = vmap.get(v, v)
 
-class Control(object):
+			cells, mss = self.snapshot()
+
+			if context is None:
+				ctx = self._title[0] + ': '
+			elif context:
+				ctx = context + ': '
+			else:
+				ctx = ''
+
+			return ctx + mss + self.context.reset_text().decode('utf-8')
+		finally:
+			self.view = sv
+
+	def frame(self, type, identifier, channel=None):
+		"""
+		# Construct a transaction frame for reporting the status.
+		# Used after the completion of the dispatcher.
+		"""
+		start, stop, metrics = self.profile()
+		ext = {
+			'@timestamp': [str(start)],
+			'@duration': [str(stop - start)],
+			'@metrics': [metrics.sequence()],
+		}
+		if identifier:
+			ext['@transaction'] = [identifier]
+
+		return frames.compose(type, self.synopsis(identifier), channel, ext)
+
+class Monitor(object):
 	"""
-	# Root monitor control; manages the device interface, screen, and status context.
+	# Terminal display management for monitoring changes in &Status instances.
 	"""
 
 	def __init__(self, device, screen, context):
@@ -465,7 +473,7 @@ class Control(object):
 
 	def allocate(self, point, width=None, height=1) -> matrix.Context:
 		"""
-		# Create a &matrix.Context instance relative to the &Control' status context.
+		# Create a &matrix.Context instance relative to the &Monitor' status context.
 		"""
 		rctx = self.context
 		if width is None:
@@ -529,10 +537,12 @@ class Control(object):
 		# Operation is buffered and must be flushed to be displayed.
 		"""
 		context = monitor.context
+		R = monitor.theme.render
+		chain = itertools.chain.from_iterable
 
 		for utype, label, ph, position, pad in fields:
-			lsep = monitor.theme.render('Label-Separator', monitor.unit_type_separators[utype])
-			i = itertools.chain.from_iterable([
+			lsep = R('Label-Separator', monitor.unit_type_separators[utype])
+			i = chain([
 				(context.seek((position+offset, 0)), b' ' * pad),
 				context.render(ph),
 				context.render(lsep),
@@ -549,9 +559,11 @@ class Control(object):
 		l = len(self._buffer)
 		buf = bytearray()
 		buf += self.screen.exit_scrolling_region()
+		buf += self.screen.set_cursor_visible(False)
 		for x in itertools.islice(self._buffer, 0, l):
 			buf += x
 		buf += self.screen.enter_scrolling_region()
+		buf += self.screen.set_cursor_visible(True)
 
 		try:
 			self._write(buf)
@@ -615,14 +627,14 @@ class Control(object):
 def setup(atrestore=b'', type='prepared',
 		destruct=True,
 		Context=matrix.Context,
-	) -> Control:
+	) -> Monitor:
 	"""
 	# Initialize the terminal for use with a scrolling region.
 
 	# The given &lines determines the horizontal area allocation to
 	# manage at the bottom or top of the screen. If negative,
 	# the top of the screen will be allocated. Allocating both is
-	# not supported by this interface as &Control only manages one
+	# not supported by this interface as &Monitor only manages one
 	# &matrix.Context.
 	"""
 	import atexit
@@ -636,7 +648,7 @@ def setup(atrestore=b'', type='prepared',
 	tty_prep()
 	atexit.register(tty_rest)
 
-	return Control(device, screen, Context(screen.terminal_type))
+	return Monitor(device, screen, Context(screen.terminal_type))
 
 _metric_units = [
 	('', '', 0),
@@ -688,47 +700,49 @@ def r_title(value):
 	# Render method for monitor titles.
 	"""
 	category, dimensions = value
-	t = str(category) + '[' + ']['.join(dimensions) + ']'
+	t = str(category)
+	if dimensions:
+		t += '[' + ']['.join(dimensions) + ']'
 	return [('plain', t)]
 
-def form(module):
+def form(module, colors=Theme.palette.colors):
 	"""
 	# Construct a &Layout and &Theme from the provided order and formatting structures.
 	"""
 	l = Layout(module.order)
-	t = Theme(matrix.Type.normal_render_parameters)
+	t = Theme(matrix.Type.normal_render_parameters).configure(colors)
 	t.implement('duration', Theme.r_duration)
 	t.implement('title', r_title)
 
-	t.define('Label-Separator', textcolor=palette.colors['background-adjacent'])
-	t.define('duration', textcolor=palette.colors['white'])
-	t.define('unit-label', textcolor=palette.colors['gray'])
-	t.define('data-rate-receive', textcolor=palette.colors['terminal-default'])
-	t.define('data-rate-transmit', textcolor=palette.colors['terminal-default'])
-	t.define('data-rate', textcolor=palette.colors['gray'])
+	t.define('Label-Separator', textcolor=colors['background-adjacent'])
+	t.define('duration', textcolor=colors['white'])
+	t.define('unit-label', textcolor=colors['gray'])
+	t.define('data-rate-receive', textcolor=colors['terminal-default'])
+	t.define('data-rate-transmit', textcolor=colors['terminal-default'])
+	t.define('data-rate', textcolor=colors['gray'])
 
-	for (k, width), (keycode, label, color, fn) in zip(module.order, module.formats):
+	for (k, path, width), (keycode, label, color, fn) in zip(module.order, module.formats):
 		if fn is not None:
 			t.implement(k, fn)
-		t.define(k, textcolor=palette.colors[color])
+		t.define(k, textcolor=colors[color])
 		l.label(k, label or None)
 
 	return t, l, getattr(module, 'types', {})
 
-def aggregate(control:Control, module, lanes=1, width=80):
+def aggregate(control:Monitor, module, lanes=1, width=80):
 	"""
-	# Construct &Monitor instnaces allocated using &control for
+	# Construct &Status instances allocated using &control for
 	# displaying the aggregate of the dimension allocations.
 
-	# Returns a sequence of &Monitor instances for the dimensions
-	# and a single Monitor for the aggregation.
+	# Returns a sequence of &Status instances for the dimensions
+	# and a single Status for the aggregation.
 	"""
 	t, l, types = form(module)
 	lanes_seq = [
-		Monitor(t, l, control.allocate((0, i), width=width))
+		Status(t, l, control.allocate((0, i), width=width))
 		for i in range(lanes)
 	]
-	m = Monitor(t, l, control.allocate((0, lanes), width=width))
+	m = Status(t, l, control.allocate((0, lanes), width=width))
 
 	for k, v in types.items():
 		m.set_field_read_type(k, v)
@@ -736,14 +750,3 @@ def aggregate(control:Control, module, lanes=1, width=80):
 			x.set_field_read_type(k, v)
 
 	return lanes_seq, m
-
-if __name__ == '__main__':
-	import time
-	st_ctl = setup(1, width=80)
-	st_ctl.initialize(['field-1', 'field-2'])
-	st_ctl.update({'field-1': 0, 'field-2': 'test'})
-	print('test-1')
-	time.sleep(1)
-	st_ctl.update({'field-1': 6, 'field-2': 'test-2'})
-	print('test-2')
-	time.sleep(2)
